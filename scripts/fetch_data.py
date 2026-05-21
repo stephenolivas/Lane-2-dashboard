@@ -136,6 +136,21 @@ def close_paginate_cursor(path, params=None):
             return
 
 
+def close_count(path, params=None):
+    """Cheap count of how many items match a list query.
+
+    Calls the endpoint with _limit=1 and reads total_results from the response,
+    avoiding full pagination. Falls back to len(data) if total_results is missing.
+    """
+    params = dict(params or {})
+    params["_limit"] = 1
+    data = close_get(path, params)
+    total = data.get("total_results")
+    if total is not None:
+        return total
+    return len(data.get("data", []))
+
+
 # ============================================================================
 # DATA HELPERS
 # ============================================================================
@@ -302,21 +317,31 @@ def fetch_owned_leads(user_id):
 
 
 def fetch_activity_mtd(user_id, month_start):
-    """Total activities, outbound calls, outbound emails for this rep MTD."""
-    since_iso = month_start.astimezone(timezone.utc).isoformat()
-    total, ob_calls, ob_emails = 0, 0, 0
-    for act in close_paginate_skip("/activity/", {
-        "user_id": user_id,
-        "date_created__gte": since_iso,
-    }):
-        total += 1
-        atype = act.get("_type")
-        direction = act.get("direction")
-        if direction == "outbound":
-            if atype == "Call":
-                ob_calls += 1
-            elif atype == "Email":
-                ob_emails += 1
+    """Total activities, outbound calls, outbound emails for this rep MTD.
+
+    The generic /activity/ endpoint rejects bare user_id filters
+    ("You must provide a single 'lead_id' filter to use 'user_id'…").
+    Type-specific activity endpoints (/activity/call/, /activity/email/, etc.)
+    accept user_id directly, so we count each type and sum.
+
+    "Total activities" sums the rep-driven communication types: calls, emails,
+    SMS, notes, meetings. System-generated activities (status changes, task
+    completions) are excluded since they don't reflect rep effort.
+    """
+    since_iso = month_start.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    base = {"user_id": user_id, "date_created__gte": since_iso}
+
+    calls    = close_count("/activity/call/",    base)
+    emails   = close_count("/activity/email/",   base)
+    sms      = close_count("/activity/sms/",     base)
+    notes    = close_count("/activity/note/",    base)
+    meetings = close_count("/activity/meeting/", base)
+    total = calls + emails + sms + notes + meetings
+
+    # Outbound subsets. Close uses "outbound" for calls and "outgoing" for emails.
+    ob_calls  = close_count("/activity/call/",  {**base, "direction": "outbound"})
+    ob_emails = close_count("/activity/email/", {**base, "direction": "outgoing"})
+
     return total, ob_calls, ob_emails
 
 
@@ -329,29 +354,26 @@ def fetch_calls_booked_mtd(user_id, month_start, month_end):
         f'custom.{FIELD_FIRST_CALL_BOOKED}>="{start_d}" '
         f'custom.{FIELD_FIRST_CALL_BOOKED}<="{end_d}"'
     )
-    count = 0
-    for _ in close_paginate_skip("/lead/", {"query": q, "_fields": "id"}):
-        count += 1
-    return count
+    return close_count("/lead/", {"query": q, "_fields": "id"})
 
 
 def fetch_deals_mtd(user_id, month_start, month_end):
     """(won_count, lost_count) for opportunities owned by this rep MTD."""
-    start_iso = month_start.astimezone(timezone.utc).isoformat()
-    end_iso   = month_end.astimezone(timezone.utc).isoformat()
+    start_iso = month_start.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    end_iso   = month_end.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
-    won = sum(1 for _ in close_paginate_skip("/opportunity/", {
+    won = close_count("/opportunity/", {
         "user_id": user_id,
         "status_type": "won",
         "date_won__gte": start_iso,
         "date_won__lt":  end_iso,
-    }))
-    lost = sum(1 for _ in close_paginate_skip("/opportunity/", {
+    })
+    lost = close_count("/opportunity/", {
         "user_id": user_id,
         "status_type": "lost",
         "date_lost__gte": start_iso,
         "date_lost__lt":  end_iso,
-    }))
+    })
     return won, lost
 
 
