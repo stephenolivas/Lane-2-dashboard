@@ -70,7 +70,11 @@ session.headers.update({"Content-Type": "application/json"})
 
 
 def close_get(path, params=None):
-    """GET to Close API with throttle + simple retry on 429/5xx."""
+    """GET to Close API with throttle + simple retry on 429/5xx.
+
+    On 4xx errors (other than 429), prints the response body before raising
+    so we can see what Close actually rejected.
+    """
     url = f"{CLOSE_BASE_URL}{path}"
     for attempt in range(3):
         r = session.get(url, params=params, timeout=30)
@@ -84,6 +88,14 @@ def close_get(path, params=None):
             print(f"  {r.status_code} from Close, retrying ({attempt + 1}/3)")
             time.sleep(2 ** attempt)
             continue
+        if not r.ok:
+            # Surface what Close actually said before raising — generic
+            # raise_for_status() hides the body.
+            print(f"  !! {r.status_code} {r.reason}  url: {r.url}")
+            try:
+                print(f"  body: {json.dumps(r.json(), indent=2)[:2000]}")
+            except Exception:
+                print(f"  body: {r.text[:2000]}")
         r.raise_for_status()
         return r.json()
     raise RuntimeError(f"Close API failed after 3 attempts: {path}")
@@ -106,9 +118,12 @@ def close_paginate_skip(path, params=None):
 
 
 def close_paginate_cursor(path, params=None):
-    """Yield items across pages for endpoints using _cursor pagination (e.g. /event/)."""
+    """Yield items across pages for endpoints using _cursor pagination (e.g. /event/).
+
+    The /event/ endpoint caps `_limit` at 50 per its docs, so default to 50 here.
+    """
     params = dict(params or {})
-    params.setdefault("_limit", 100)
+    params.setdefault("_limit", 50)
     cursor = None
     while True:
         if cursor:
@@ -194,11 +209,12 @@ def fetch_calendar(month_start, month_end):
     # Close /event/ filters by `date_updated`. Upper bound is unnecessary
     # because we always query the current month and the script runs in real
     # time — events from past months won't satisfy `date_updated__gte=<month_start>`.
-    # (Close also rejects `__lt`; only `__gte` / `__lte` are accepted.)
+    # Use Z-suffixed UTC (matches Close's documented format).
     params = {
         "object_type": "lead",
         "action": "updated",
-        "date_updated__gte": month_start.astimezone(timezone.utc).isoformat(),
+        "date_updated__gte": month_start.astimezone(timezone.utc)
+                                        .strftime("%Y-%m-%dT%H:%M:%SZ"),
     }
 
     page_count = 0
