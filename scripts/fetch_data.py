@@ -33,12 +33,12 @@ import requests
 
 CLOSE_API_KEY = os.environ.get("CLOSE_API_KEY")
 if not CLOSE_API_KEY:
-    print("ERROR: CLOSE_API_KEY env var not set", file=sys.stderr)
+    print("ERROR: CLOSE_API_KEY env var not set", file=sys.stderr, flush=True)
     sys.exit(1)
 
 CLOSE_BASE_URL = "https://api.close.com/api/v1"
 TIMEZONE = ZoneInfo("America/Los_Angeles")
-THROTTLE_SECONDS = 0.5  # gentle pacing between calls; matches sibling dashboards
+THROTTLE_SECONDS = 0.1  # Close allows ~60 req/sec; 0.1s = 10 req/sec is safe
 
 # Lane 2 reps. Display order doesn't matter — output is sorted by owned_leads desc.
 LANE_2_REPS = [
@@ -81,21 +81,21 @@ def close_get(path, params=None):
         time.sleep(THROTTLE_SECONDS)
         if r.status_code == 429:
             wait = int(r.headers.get("Retry-After", 5))
-            print(f"  rate-limited, sleeping {wait}s")
+            print(f"  rate-limited, sleeping {wait}s", flush=True)
             time.sleep(wait)
             continue
         if 500 <= r.status_code < 600 and attempt < 2:
-            print(f"  {r.status_code} from Close, retrying ({attempt + 1}/3)")
+            print(f"  {r.status_code} from Close, retrying ({attempt + 1}/3)", flush=True)
             time.sleep(2 ** attempt)
             continue
         if not r.ok:
             # Surface what Close actually said before raising — generic
             # raise_for_status() hides the body.
-            print(f"  !! {r.status_code} {r.reason}  url: {r.url}")
+            print(f"  !! {r.status_code} {r.reason}  url: {r.url}", flush=True)
             try:
-                print(f"  body: {json.dumps(r.json(), indent=2)[:2000]}")
+                print(f"  body: {json.dumps(r.json(), indent=2)[:2000]}", flush=True)
             except Exception:
-                print(f"  body: {r.text[:2000]}")
+                print(f"  body: {r.text[:2000]}", flush=True)
         r.raise_for_status()
         return r.json()
     raise RuntimeError(f"Close API failed after 3 attempts: {path}")
@@ -193,18 +193,21 @@ def days_in_month(month_start, month_end):
 
 def fetch_calendar(month_start, month_end):
     """
-    Walks /event/ for object_type=lead, action=updated, in the month window.
-    Counts a (lead, day) only when the lead-owner custom field changed to a
-    Lane 2 rep. Then filters LTF - Quiz Funnel via per-lead funnel lookup.
-    Dedupes per lead per calendar day (PT).
+    Walks /event/ for object_type=lead, action=updated, since month_start.
+    For each event whose lead-owner custom field changed to a Lane 2 rep AND
+    whose lead is not on the LTF Quiz Funnel, records (lead_id, PT calendar day).
+    Funnel value is read from the event's `data` payload — no separate lookup.
+    Dedupes per (lead, day) so a same-day bounce counts once.
 
     Returns dict[YYYY-MM-DD] -> int.
     """
     print(f"[calendar] scanning lead.updated events "
-          f"{month_start.date()} → {month_end.date()}")
+          f"{month_start.date()} → {month_end.date()}", flush=True)
 
-    candidates = []         # list of (pt_date_iso, lead_id)
-    lead_ids = set()        # for funnel lookup
+    per_day = defaultdict(set)   # day_str -> set of lead_ids
+    excluded_funnel_count = 0
+    not_owner_change = 0
+    not_lane2 = 0
 
     # Close /event/ filters by `date_updated`. Upper bound is unnecessary
     # because we always query the current month and the script runs in real
@@ -218,18 +221,34 @@ def fetch_calendar(month_start, month_end):
     }
 
     page_count = 0
+    event_count = 0
     for ev in close_paginate_cursor("/event/", params):
-        page_count += 1
-        new_owner  = get_custom(ev.get("data"),          FIELD_LEAD_OWNER)
+        event_count += 1
+        if event_count % 1000 == 0:
+            page_count = event_count // 50
+            print(f"  [calendar] scanned {event_count} events "
+                  f"(~{page_count} pages), {sum(len(s) for s in per_day.values())} qualifying so far",
+                  flush=True)
+
+        data = ev.get("data") or {}
+        new_owner  = get_custom(data,                   FIELD_LEAD_OWNER)
         prev_owner = get_custom(ev.get("previous_data"), FIELD_LEAD_OWNER)
 
         # Must be an actual owner change AND new owner must be Lane 2
         if new_owner == prev_owner:
+            not_owner_change += 1
             continue
         if new_owner not in LANE_2_USER_IDS:
+            not_lane2 += 1
             continue
 
-        lead_id = ev.get("lead_id") or (ev.get("data") or {}).get("id")
+        # Pull funnel from the event's data payload (no separate API call)
+        funnel = get_custom(data, FIELD_FUNNEL_NAME)
+        if funnel in EXCLUDED_FUNNELS:
+            excluded_funnel_count += 1
+            continue
+
+        lead_id = ev.get("lead_id") or data.get("id")
         if not lead_id:
             continue
 
@@ -245,37 +264,18 @@ def fetch_calendar(month_start, month_end):
             continue
         pt_date = dt.astimezone(TIMEZONE).date().isoformat()
 
-        candidates.append((pt_date, lead_id))
-        lead_ids.add(lead_id)
+        per_day[pt_date].add(lead_id)
 
-    print(f"[calendar] scanned {page_count} events → "
-          f"{len(candidates)} candidates / {len(lead_ids)} unique leads")
-
-    # Funnel lookup — one call per unique lead to filter LTF - Quiz Funnel
-    excluded = set()
-    if lead_ids:
-        print(f"[calendar] funnel lookup for {len(lead_ids)} leads")
-        for lid in lead_ids:
-            try:
-                ld = close_get(f"/lead/{lid}/",
-                               {"_fields": f"id,custom.{FIELD_FUNNEL_NAME}"})
-            except requests.HTTPError:
-                # lead might be deleted; skip it (= include it, no funnel info)
-                continue
-            funnel = get_custom(ld, FIELD_FUNNEL_NAME)
-            if funnel in EXCLUDED_FUNNELS:
-                excluded.add(lid)
-        print(f"[calendar] excluded {len(excluded)} LTF Quiz Funnel leads")
-
-    # Dedupe per (lead, day), drop excluded leads
-    per_day = defaultdict(set)
-    for pt_date, lid in candidates:
-        if lid in excluded:
-            continue
-        per_day[pt_date].add(lid)
+    print(f"[calendar] scanned {event_count} events total · "
+          f"{not_owner_change} non-owner-change · "
+          f"{not_lane2} non-Lane2 owner · "
+          f"{excluded_funnel_count} LTF excluded",
+          flush=True)
 
     counts = {d: len(s) for d, s in per_day.items()}
-    print(f"[calendar] days with activity: {len(counts)}")
+    print(f"[calendar] days with activity: {len(counts)} · "
+          f"total qualifying leads: {sum(counts.values())}",
+          flush=True)
     return counts
 
 
@@ -356,7 +356,7 @@ def fetch_deals_mtd(user_id, month_start, month_end):
 
 
 def build_rep_row(rep, month_start, month_end):
-    print(f"[rep] {rep['name']}")
+    print(f"[rep] {rep['name']}", flush=True)
     uid = rep["user_id"]
 
     leads = fetch_owned_leads(uid)
@@ -396,9 +396,9 @@ def main():
     started = time.time()
     now = now_pt()
     month_start, month_end, month_label = month_bounds(now)
-    print(f"Run: {now.isoformat()}")
+    print(f"Run: {now.isoformat()}", flush=True)
     print(f"Month: {month_label} ({month_start.date()} → "
-          f"{(month_end - timedelta(days=1)).date()})\n")
+          f"{(month_end - timedelta(days=1)).date()})\n", flush=True)
 
     calendar_counts = fetch_calendar(month_start, month_end)
 
@@ -408,7 +408,7 @@ def main():
         for d in days_in_month(month_start, month_end)
     }
 
-    print()
+    print("", flush=True)
     reps = [build_rep_row(r, month_start, month_end) for r in LANE_2_REPS]
     reps.sort(key=lambda x: x["owned_leads"], reverse=True)
 
@@ -424,15 +424,15 @@ def main():
     # Write live data + monthly archive
     repo_root = Path(__file__).resolve().parent.parent
     (repo_root / "data.json").write_text(json.dumps(output, indent=2))
-    print(f"\nwrote {repo_root / 'data.json'}")
+    print(f"\nwrote {repo_root / 'data.json'}", flush=True)
 
     archives = repo_root / "archives"
     archives.mkdir(exist_ok=True)
     archive_path = archives / f"data_{month_label}.json"
     archive_path.write_text(json.dumps(output, indent=2))
-    print(f"wrote {archive_path}")
+    print(f"wrote {archive_path}", flush=True)
 
-    print(f"\nDone in {time.time() - started:.1f}s")
+    print(f"\nDone in {time.time() - started:.1f}s", flush=True)
 
 
 if __name__ == "__main__":
