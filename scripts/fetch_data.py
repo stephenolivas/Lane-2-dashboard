@@ -122,6 +122,30 @@ def close_paginate_cursor(path, params=None):
 
 
 # ============================================================================
+# DATA HELPERS
+# ============================================================================
+
+def get_custom(payload, field_id):
+    """
+    Read a Close custom field from a payload that may use either
+    flat keys ('custom.cf_xxx') or a nested dict ({'custom': {'cf_xxx': ...}}).
+
+    Close's REST responses store custom fields as flat top-level keys (e.g.
+    `"custom.cf_gOfS9pFw…": "user_xxx"`). The nested-dict form is included as
+    a defensive fallback in case any endpoint serializes differently.
+    """
+    if not payload:
+        return None
+    v = payload.get(f"custom.{field_id}")
+    if v is not None:
+        return v
+    nested = payload.get("custom")
+    if isinstance(nested, dict):
+        return nested.get(field_id)
+    return None
+
+
+# ============================================================================
 # DATE HELPERS
 # ============================================================================
 
@@ -167,18 +191,20 @@ def fetch_calendar(month_start, month_end):
     candidates = []         # list of (pt_date_iso, lead_id)
     lead_ids = set()        # for funnel lookup
 
+    # Close /event/ filters by date_created (when the event was logged).
+    # There is no date_updated field on events.
     params = {
         "object_type": "lead",
         "action": "updated",
-        "date_updated__gte": month_start.astimezone(timezone.utc).isoformat(),
-        "date_updated__lt":  month_end.astimezone(timezone.utc).isoformat(),
+        "date_created__gte": month_start.astimezone(timezone.utc).isoformat(),
+        "date_created__lt":  month_end.astimezone(timezone.utc).isoformat(),
     }
 
     page_count = 0
     for ev in close_paginate_cursor("/event/", params):
         page_count += 1
-        new_owner  = ((ev.get("data") or {}).get("custom") or {}).get(FIELD_LEAD_OWNER)
-        prev_owner = ((ev.get("previous_data") or {}).get("custom") or {}).get(FIELD_LEAD_OWNER)
+        new_owner  = get_custom(ev.get("data"),          FIELD_LEAD_OWNER)
+        prev_owner = get_custom(ev.get("previous_data"), FIELD_LEAD_OWNER)
 
         # Must be an actual owner change AND new owner must be Lane 2
         if new_owner == prev_owner:
@@ -190,7 +216,8 @@ def fetch_calendar(month_start, month_end):
         if not lead_id:
             continue
 
-        ts = ev.get("date_updated") or ev.get("date_created")
+        # Events carry date_created (when the event was logged).
+        ts = ev.get("date_created") or ev.get("date_updated")
         if not ts:
             continue
         try:
@@ -216,7 +243,7 @@ def fetch_calendar(month_start, month_end):
             except requests.HTTPError:
                 # lead might be deleted; skip it (= include it, no funnel info)
                 continue
-            funnel = (ld.get("custom") or {}).get(FIELD_FUNNEL_NAME)
+            funnel = get_custom(ld, FIELD_FUNNEL_NAME)
             if funnel in EXCLUDED_FUNNELS:
                 excluded.add(lid)
         print(f"[calendar] excluded {len(excluded)} LTF Quiz Funnel leads")
@@ -249,7 +276,7 @@ def fetch_owned_leads(user_id):
     }):
         leads.append({
             "id": ld.get("id"),
-            "handraiser": (ld.get("custom") or {}).get(FIELD_HANDRAISER),
+            "handraiser": get_custom(ld, FIELD_HANDRAISER),
             "times_communicated": ld.get("times_communicated") or 0,
         })
     return leads
