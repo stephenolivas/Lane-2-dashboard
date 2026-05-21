@@ -3,7 +3,6 @@ name: Update Lane 2 Dashboard
 on:
   workflow_dispatch:
   # Backup cron in case cron-job.org is down — every 30 min, weekdays only.
-  # Remove this if you only want cron-job.org as the trigger.
   schedule:
     - cron: '*/30 13-23 * * 1-5'  # ~6 AM – 4 PM PT
 
@@ -14,9 +13,13 @@ concurrency:
 jobs:
   update:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 25
     permissions:
       contents: write
+    env:
+      # Make Python flush stdout/stderr immediately so the workflow log shows
+      # progress in real time instead of after the step finishes.
+      PYTHONUNBUFFERED: "1"
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -34,7 +37,8 @@ jobs:
       - name: Run fetcher
         env:
           CLOSE_API_KEY: ${{ secrets.CLOSE_API_KEY }}
-        run: python scripts/fetch_data.py
+        # -u forces unbuffered output as a belt-and-suspenders alongside PYTHONUNBUFFERED.
+        run: python -u scripts/fetch_data.py
 
       - name: Commit & push
         run: |
