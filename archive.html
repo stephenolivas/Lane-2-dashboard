@@ -1,0 +1,355 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Lane 2 Activity — Archive</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=Geist+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  /* ─ All styles mirror index.html so archived months look identical ─ */
+  :root {
+    --bg: #fafaf9; --surface: #ffffff; --text: #18181b; --text-muted: #71717a;
+    --text-subtle: #a1a1aa; --border: #e4e4e7; --border-strong: #d4d4d8;
+    --accent: #1e40af; --accent-soft: #dbeafe; --accent-text: #1e3a8a;
+    --warn: #b45309; --good: #15803d; --bad: #b91c1c; --stripe: #f8f8f7;
+    --heat-0: transparent; --heat-1: #eff6ff; --heat-2: #dbeafe;
+    --heat-3: #bfdbfe; --heat-4: #93c5fd; --heat-5: #60a5fa;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; background: var(--bg); color: var(--text);
+    font-family: 'Geist', system-ui, -apple-system, sans-serif;
+    font-size: 14px; line-height: 1.45; -webkit-font-smoothing: antialiased; }
+  .num { font-family: 'Geist Mono', ui-monospace, monospace; font-variant-numeric: tabular-nums; }
+  .container { max-width: 1400px; margin: 0 auto; padding: 32px 28px 64px; }
+
+  header.dash-header { display: flex; align-items: flex-end; justify-content: space-between;
+    margin-bottom: 28px; gap: 16px; flex-wrap: wrap; }
+  .title-block h1 { font-size: 28px; font-weight: 600; margin: 0; letter-spacing: -0.025em; }
+  .title-block .subtitle { color: var(--text-muted); font-size: 14px; margin-top: 2px; }
+  .header-meta { display: flex; align-items: center; gap: 18px; font-size: 13px; color: var(--text-muted); }
+  .header-meta a { color: var(--accent); text-decoration: none; font-weight: 500; }
+  .header-meta a:hover { text-decoration: underline; }
+
+  .picker {
+    display: flex; align-items: center; gap: 10px; margin-bottom: 22px;
+    background: var(--surface); border: 1px solid var(--border); border-radius: 8px;
+    padding: 12px 16px;
+  }
+  .picker label { font-size: 12px; color: var(--text-muted); text-transform: uppercase;
+    letter-spacing: 0.05em; font-weight: 500; }
+  .picker select {
+    font-family: inherit; font-size: 14px; border: 1px solid var(--border-strong);
+    border-radius: 6px; padding: 6px 12px; background: var(--surface);
+    color: var(--text); cursor: pointer;
+  }
+  .picker .archived-on { color: var(--text-muted); font-size: 12.5px; margin-left: auto; }
+
+  .kpi-strip { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 24px; }
+  .kpi { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 14px 16px; }
+  .kpi .label { font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em;
+    color: var(--text-muted); font-weight: 500; }
+  .kpi .value { font-size: 24px; font-weight: 600; margin-top: 6px; letter-spacing: -0.015em; }
+
+  .section { background: var(--surface); border: 1px solid var(--border); border-radius: 10px;
+    margin-bottom: 20px; overflow: hidden; }
+  .section-head { padding: 16px 20px; border-bottom: 1px solid var(--border);
+    display: flex; align-items: center; justify-content: space-between; }
+  .section-head h2 { font-size: 15px; font-weight: 600; margin: 0; letter-spacing: -0.01em; }
+  .section-head .helper { font-size: 12px; color: var(--text-muted); }
+
+  .calendar { padding: 16px 20px 20px; }
+  .cal-weekdays { display: grid; grid-template-columns: repeat(7, 1fr); gap: 6px; margin-bottom: 6px; }
+  .cal-weekdays div { text-align: center; font-size: 11px; text-transform: uppercase;
+    letter-spacing: 0.06em; color: var(--text-muted); padding: 4px 0; font-weight: 500; }
+  .cal-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 6px; }
+  .cal-cell { aspect-ratio: 1.4 / 1; border: 1px solid var(--border); border-radius: 6px;
+    padding: 8px; display: flex; flex-direction: column; justify-content: space-between;
+    background: var(--surface); position: relative; }
+  .cal-cell.empty { background: transparent; border: 1px solid transparent; }
+  .cal-cell.weekend { background: var(--stripe); }
+  .cal-cell.future { background: var(--stripe); opacity: 0.5; }
+  .cal-day-num { font-size: 11px; font-weight: 500; color: var(--text-muted); align-self: flex-start; }
+  .cal-count { font-size: 22px; font-weight: 600; font-family: 'Geist Mono', ui-monospace, monospace;
+    font-variant-numeric: tabular-nums; letter-spacing: -0.02em; align-self: flex-end; line-height: 1; }
+  .cal-cell.zero .cal-count { color: var(--text-subtle); font-weight: 400; }
+  .cal-cell.heat-1 { background-color: var(--heat-1); }
+  .cal-cell.heat-2 { background-color: var(--heat-2); }
+  .cal-cell.heat-3 { background-color: var(--heat-3); }
+  .cal-cell.heat-4 { background-color: var(--heat-4); }
+  .cal-cell.heat-5 { background-color: var(--heat-5); color: var(--surface); }
+  .cal-cell.heat-5 .cal-day-num { color: rgba(255,255,255,0.85); }
+  .cal-cell.heat-4 .cal-day-num { color: var(--accent-text); }
+  .cal-cell.heat-5 .cal-count { color: var(--surface); }
+
+  .reps-table-wrap { overflow-x: auto; }
+  table.reps { width: 100%; border-collapse: collapse; font-size: 13.5px; }
+  .reps th, .reps td { padding: 12px 14px; text-align: left;
+    border-bottom: 1px solid var(--border); vertical-align: top; }
+  .reps th { background: var(--stripe); font-size: 11px; text-transform: uppercase;
+    letter-spacing: 0.06em; color: var(--text-muted); font-weight: 500; white-space: nowrap; }
+  .reps td.num { text-align: right; } .reps th.num { text-align: right; }
+  .reps tbody tr:hover { background: var(--stripe); }
+  .rep-name { font-weight: 600; display: flex; align-items: center; gap: 6px; white-space: nowrap; }
+  .lead-badge { font-size: 9.5px; font-weight: 600; background: var(--accent-soft);
+    color: var(--accent-text); padding: 1px 6px; border-radius: 4px;
+    text-transform: uppercase; letter-spacing: 0.04em; }
+  .owned-cell { min-width: 240px; }
+  .owned-total { font-weight: 600; font-family: 'Geist Mono', ui-monospace, monospace;
+    font-variant-numeric: tabular-nums; margin-bottom: 4px; }
+  .breakdown-list { display: flex; flex-direction: column; gap: 1px;
+    color: var(--text-muted); font-size: 12.5px; }
+  .breakdown-list .bd-row { display: flex; gap: 8px; }
+  .breakdown-list .bd-count { font-family: 'Geist Mono', ui-monospace, monospace;
+    font-variant-numeric: tabular-nums; min-width: 26px; text-align: right;
+    color: var(--text); font-weight: 500; }
+  .breakdown-list .bd-label.unset { font-style: italic; color: var(--text-subtle); }
+  tr.totals-row td { background: var(--stripe); font-weight: 600;
+    border-top: 2px solid var(--border-strong); border-bottom: none; }
+
+  footer { margin-top: 28px; font-size: 12px; color: var(--text-subtle); text-align: center; }
+  .loading, .error { padding: 80px 20px; text-align: center; color: var(--text-muted); }
+  .error { color: var(--bad); }
+
+  @media (max-width: 760px) {
+    .container { padding: 16px; }
+    .kpi-strip { grid-template-columns: repeat(2, 1fr); }
+    .cal-count { font-size: 16px; }
+    .reps th, .reps td { padding: 10px 8px; font-size: 12.5px; }
+    .picker { flex-wrap: wrap; }
+  }
+</style>
+</head>
+<body>
+<div class="container">
+  <header class="dash-header">
+    <div class="title-block">
+      <h1>Lane 2 Activity — Archive</h1>
+      <div class="subtitle">Historical monthly snapshots</div>
+    </div>
+    <div class="header-meta">
+      <a href="index.html">← Back to current month</a>
+    </div>
+  </header>
+
+  <div class="picker">
+    <label for="month-picker">Month:</label>
+    <select id="month-picker"><option>Loading…</option></select>
+    <span class="archived-on" id="archived-on"></span>
+  </div>
+
+  <div id="content">
+    <div class="loading">Select a month to view archived data.</div>
+  </div>
+</div>
+
+<script>
+const WEEKDAY_LABELS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+
+function fmtInt(n) { return n == null ? '—' : Number(n).toLocaleString(); }
+function fmtUpdated(iso) {
+  try {
+    const d = new Date(iso);
+    return d.toLocaleString('en-US', {
+      month: 'short', day: 'numeric', year: 'numeric',
+      hour: 'numeric', minute: '2-digit', timeZone: 'America/Los_Angeles'
+    }) + ' PT';
+  } catch (e) { return iso; }
+}
+function monthLabel(key) {
+  const [y, m] = key.split('-').map(Number);
+  return new Date(Date.UTC(y, m - 1, 1)).toLocaleString('en-US', {
+    month: 'long', year: 'numeric', timeZone: 'UTC'
+  });
+}
+function dateFromKey(key) {
+  const [y, m, d] = key.split('-').map(Number);
+  return new Date(Date.UTC(y, m - 1, d, 12, 0, 0));
+}
+function heatClass(count, maxCount) {
+  if (!count) return 'zero';
+  if (maxCount <= 0) return '';
+  const pct = count / maxCount;
+  if (pct >= 0.85) return 'heat-5';
+  if (pct >= 0.65) return 'heat-4';
+  if (pct >= 0.45) return 'heat-3';
+  if (pct >= 0.25) return 'heat-2';
+  return 'heat-1';
+}
+
+function renderCalendar(data) {
+  const cal = data.calendar || {};
+  const days = Object.keys(cal).sort();
+  if (!days.length) return '<div class="calendar"><em>No days.</em></div>';
+  const first = dateFromKey(days[0]);
+  const leadingBlanks = first.getUTCDay();
+  const maxCount = Math.max(0, ...days.map(k => cal[k] || 0));
+  const today = data.today;
+
+  const cells = [];
+  for (let i = 0; i < leadingBlanks; i++) cells.push('<div class="cal-cell empty"></div>');
+  for (const k of days) {
+    const c = cal[k] || 0;
+    const d = dateFromKey(k);
+    const dow = d.getUTCDay();
+    const isFuture = (today && k > today);
+    const klass = ['cal-cell',
+      isFuture ? 'future' : '',
+      (dow === 0 || dow === 6) ? 'weekend' : '',
+      !isFuture ? heatClass(c, maxCount) : '',
+    ].filter(Boolean).join(' ');
+    cells.push(`
+      <div class="${klass}" title="${k}: ${c} leads assigned">
+        <span class="cal-day-num">${d.getUTCDate()}</span>
+        <span class="cal-count">${isFuture ? '' : c}</span>
+      </div>
+    `);
+  }
+  return `<div class="calendar">
+    <div class="cal-weekdays">${WEEKDAY_LABELS.map(w => `<div>${w}</div>`).join('')}</div>
+    <div class="cal-grid">${cells.join('')}</div>
+  </div>`;
+}
+
+function renderBreakdown(breakdown) {
+  const entries = Object.entries(breakdown || {});
+  if (!entries.length) return '<div class="breakdown-list"><div class="bd-row"><span class="bd-label">—</span></div></div>';
+  entries.sort((a, b) => {
+    if (a[0] === '(unset)') return 1;
+    if (b[0] === '(unset)') return -1;
+    return b[1] - a[1];
+  });
+  return `<div class="breakdown-list">${entries.map(([label, count]) => `
+    <div class="bd-row">
+      <span class="bd-count">${count}</span>
+      <span class="bd-label ${label === '(unset)' ? 'unset' : ''}">${label}</span>
+    </div>
+  `).join('')}</div>`;
+}
+
+function renderReps(data) {
+  const reps = data.reps || [];
+  if (!reps.length) return '<p style="padding:20px;color:var(--text-muted)">No reps.</p>';
+
+  const agg = { brk: {}, owned: 0, acts: 0, zero: 0, calls: 0, emails: 0, booked: 0, won: 0, lost: 0 };
+  for (const r of reps) {
+    agg.owned += r.owned_leads || 0;
+    agg.acts += r.activities_mtd || 0;
+    agg.zero += r.zero_comms_leads || 0;
+    agg.calls += r.outbound_calls_mtd || 0;
+    agg.emails += r.outbound_emails_mtd || 0;
+    agg.booked += r.calls_booked_mtd || 0;
+    agg.won += r.deals_closed_mtd || 0;
+    agg.lost += r.deals_lost_mtd || 0;
+    for (const [k, v] of Object.entries(r.handraiser_breakdown || {})) {
+      agg.brk[k] = (agg.brk[k] || 0) + v;
+    }
+  }
+
+  const rows = reps.map(r => `
+    <tr>
+      <td><div class="rep-name">${r.name}${r.is_lead ? '<span class="lead-badge">Lead</span>' : ''}</div></td>
+      <td class="owned-cell">
+        <div class="owned-total">Total = ${fmtInt(r.owned_leads)}</div>
+        ${renderBreakdown(r.handraiser_breakdown)}
+      </td>
+      <td class="num">${fmtInt(r.activities_mtd)}</td>
+      <td class="num">${fmtInt(r.zero_comms_leads)}</td>
+      <td class="num">${fmtInt(r.outbound_calls_mtd)}</td>
+      <td class="num">${fmtInt(r.outbound_emails_mtd)}</td>
+      <td class="num">${fmtInt(r.calls_booked_mtd)}</td>
+      <td class="num">${fmtInt(r.deals_closed_mtd)}</td>
+      <td class="num">${fmtInt(r.deals_lost_mtd)}</td>
+    </tr>
+  `).join('');
+
+  return `<div class="reps-table-wrap"><table class="reps">
+    <thead><tr>
+      <th>Rep</th><th># Owned Leads</th><th class="num"># Activities</th>
+      <th class="num">Leads w/ 0 Comms</th><th class="num"># Outbound Calls</th>
+      <th class="num"># Outbound Emails</th><th class="num">Calls Booked</th>
+      <th class="num">Deals Closed</th><th class="num">Deals Lost</th>
+    </tr></thead>
+    <tbody>${rows}
+      <tr class="totals-row">
+        <td>Team Total</td>
+        <td class="owned-cell">
+          <div class="owned-total">Total = ${fmtInt(agg.owned)}</div>
+          ${renderBreakdown(agg.brk)}
+        </td>
+        <td class="num">${fmtInt(agg.acts)}</td>
+        <td class="num">${fmtInt(agg.zero)}</td>
+        <td class="num">${fmtInt(agg.calls)}</td>
+        <td class="num">${fmtInt(agg.emails)}</td>
+        <td class="num">${fmtInt(agg.booked)}</td>
+        <td class="num">${fmtInt(agg.won)}</td>
+        <td class="num">${fmtInt(agg.lost)}</td>
+      </tr>
+    </tbody></table></div>`;
+}
+
+function render(data) {
+  document.getElementById('archived-on').textContent =
+    'Snapshot taken: ' + fmtUpdated(data.generated_at);
+
+  const totalCal = data.total_assignments_mtd || 0;
+  const totalOwn = (data.reps || []).reduce((s, r) => s + (r.owned_leads || 0), 0);
+  const totalZ = (data.reps || []).reduce((s, r) => s + (r.zero_comms_leads || 0), 0);
+  const totalB = (data.reps || []).reduce((s, r) => s + (r.calls_booked_mtd || 0), 0);
+
+  document.getElementById('content').innerHTML = `
+    <div class="kpi-strip">
+      <div class="kpi"><div class="label">Assignments (Month)</div><div class="value num">${fmtInt(totalCal)}</div></div>
+      <div class="kpi"><div class="label">Owned Leads (Snapshot)</div><div class="value num">${fmtInt(totalOwn)}</div></div>
+      <div class="kpi"><div class="label">Leads w/ 0 Comms</div><div class="value num">${fmtInt(totalZ)}</div></div>
+      <div class="kpi"><div class="label">Calls Booked</div><div class="value num">${fmtInt(totalB)}</div></div>
+    </div>
+    <section class="section">
+      <div class="section-head">
+        <h2>Lead assignments — ${data.month_label || ''}</h2>
+        <span class="helper">Deduped per lead per day · excludes LTF - Quiz Funnel</span>
+      </div>
+      ${renderCalendar(data)}
+    </section>
+    <section class="section">
+      <div class="section-head"><h2>Rep details</h2></div>
+      ${renderReps(data)}
+    </section>
+  `;
+}
+
+async function loadMonth(key) {
+  document.getElementById('content').innerHTML = '<div class="loading">Loading ' + monthLabel(key) + '…</div>';
+  try {
+    const resp = await fetch(`archives/data_${key}.json`, { cache: 'no-store' });
+    if (!resp.ok) throw new Error('HTTP ' + resp.status);
+    const data = await resp.json();
+    render(data);
+  } catch (e) {
+    document.getElementById('content').innerHTML =
+      `<div class="error">Failed to load archive for ${key}: ${e.message}</div>`;
+  }
+}
+
+async function main() {
+  try {
+    const r = await fetch('archives/index.json', { cache: 'no-store' });
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    const idx = await r.json();
+    const months = (idx.months || []).sort().reverse();
+    const sel = document.getElementById('month-picker');
+    sel.innerHTML = months.map(m => `<option value="${m}">${monthLabel(m)}</option>`).join('');
+    sel.addEventListener('change', e => loadMonth(e.target.value));
+    if (months.length) loadMonth(months[0]);
+    else document.getElementById('content').innerHTML =
+      '<div class="loading">No archived months yet.</div>';
+  } catch (e) {
+    document.getElementById('content').innerHTML =
+      `<div class="error">Failed to load archive index: ${e.message}</div>`;
+  }
+}
+main();
+</script>
+</body>
+</html>
