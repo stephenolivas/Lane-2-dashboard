@@ -139,16 +139,22 @@ def close_paginate_cursor(path, params=None):
 def close_count(path, params=None):
     """Cheap count of how many items match a list query.
 
-    Calls the endpoint with _limit=1 and reads total_results from the response,
-    avoiding full pagination. Falls back to len(data) if total_results is missing.
+    Fast path: call with _limit=1 and read `total_results` from the response.
+    Works for /lead/ and /opportunity/.
+
+    Slow path: type-specific activity endpoints (/activity/call/, /activity/email/, etc.)
+    do NOT return `total_results`. When it's missing we re-paginate the endpoint
+    fully and count items. Returning len(data) from the _limit=1 response would
+    incorrectly give 1 for any non-empty result.
     """
-    params = dict(params or {})
-    params["_limit"] = 1
-    data = close_get(path, params)
+    p_fast = dict(params or {})
+    p_fast["_limit"] = 1
+    data = close_get(path, p_fast)
     total = data.get("total_results")
     if total is not None:
         return total
-    return len(data.get("data", []))
+    # Slow path: paginate the original params (without our _limit=1 override).
+    return sum(1 for _ in close_paginate_skip(path, dict(params or {})))
 
 
 # ============================================================================
@@ -211,23 +217,23 @@ def fetch_calendar(month_start, month_end):
     Walks /event/ for object_type=lead, action=updated, since month_start.
     For each event whose lead-owner custom field changed to a Lane 2 rep AND
     whose lead is not on the LTF Quiz Funnel, records (lead_id, PT calendar day).
-    Funnel value is read from the event's `data` payload — no separate lookup.
+    Funnel + handraiser are read from the event's `data` payload — no separate lookups.
     Dedupes per (lead, day) so a same-day bounce counts once.
 
-    Returns dict[YYYY-MM-DD] -> int.
+    Returns (counts, breakdowns):
+      counts:     dict[YYYY-MM-DD] -> int    (total leads that day)
+      breakdowns: dict[YYYY-MM-DD] -> dict[handraiser_value] -> int
+                  (per-day handraiser breakdown; "(unset)" used for missing values)
     """
     print(f"[calendar] scanning lead.updated events "
           f"{month_start.date()} → {month_end.date()}", flush=True)
 
-    per_day = defaultdict(set)   # day_str -> set of lead_ids
+    per_day = defaultdict(set)              # day_str -> set of lead_ids
+    per_day_handraiser = defaultdict(dict)  # day_str -> {lead_id: handraiser}
     excluded_funnel_count = 0
     not_owner_change = 0
     not_lane2 = 0
 
-    # Close /event/ filters by `date_updated`. Upper bound is unnecessary
-    # because we always query the current month and the script runs in real
-    # time — events from past months won't satisfy `date_updated__gte=<month_start>`.
-    # Use Z-suffixed UTC (matches Close's documented format).
     params = {
         "object_type": "lead",
         "action": "updated",
@@ -235,7 +241,6 @@ def fetch_calendar(month_start, month_end):
                                         .strftime("%Y-%m-%dT%H:%M:%SZ"),
     }
 
-    page_count = 0
     event_count = 0
     for ev in close_paginate_cursor("/event/", params):
         event_count += 1
@@ -249,7 +254,6 @@ def fetch_calendar(month_start, month_end):
         new_owner  = get_custom(data,                   FIELD_LEAD_OWNER)
         prev_owner = get_custom(ev.get("previous_data"), FIELD_LEAD_OWNER)
 
-        # Must be an actual owner change AND new owner must be Lane 2
         if new_owner == prev_owner:
             not_owner_change += 1
             continue
@@ -257,7 +261,6 @@ def fetch_calendar(month_start, month_end):
             not_lane2 += 1
             continue
 
-        # Pull funnel from the event's data payload (no separate API call)
         funnel = get_custom(data, FIELD_FUNNEL_NAME)
         if funnel in EXCLUDED_FUNNELS:
             excluded_funnel_count += 1
@@ -267,9 +270,6 @@ def fetch_calendar(month_start, month_end):
         if not lead_id:
             continue
 
-        # Events carry both date_created (original) and date_updated (latest
-        # action — Close consolidates close-in-time updates). Use date_updated
-        # to bucket the lead into the day the latest assignment landed on.
         ts = ev.get("date_updated") or ev.get("date_created")
         if not ts:
             continue
@@ -279,7 +279,12 @@ def fetch_calendar(month_start, month_end):
             continue
         pt_date = dt.astimezone(TIMEZONE).date().isoformat()
 
+        if lead_id in per_day[pt_date]:
+            continue   # dedupe: lead already counted for this day
         per_day[pt_date].add(lead_id)
+
+        handraiser = get_custom(data, FIELD_HANDRAISER) or "(unset)"
+        per_day_handraiser[pt_date][lead_id] = handraiser
 
     print(f"[calendar] scanned {event_count} events total · "
           f"{not_owner_change} non-owner-change · "
@@ -288,10 +293,22 @@ def fetch_calendar(month_start, month_end):
           flush=True)
 
     counts = {d: len(s) for d, s in per_day.items()}
+    breakdowns = {}
+    for day, lead_handraisers in per_day_handraiser.items():
+        bd = defaultdict(int)
+        for h in lead_handraisers.values():
+            bd[h] += 1
+        # Sort by count desc with (unset) last for stable rendering
+        ordered = sorted(
+            bd.items(),
+            key=lambda kv: (kv[0] == "(unset)", -kv[1], kv[0])
+        )
+        breakdowns[day] = dict(ordered)
+
     print(f"[calendar] days with activity: {len(counts)} · "
           f"total qualifying leads: {sum(counts.values())}",
           flush=True)
-    return counts
+    return counts, breakdowns
 
 
 # ============================================================================
@@ -299,15 +316,18 @@ def fetch_calendar(month_start, month_end):
 # ============================================================================
 
 def fetch_owned_leads(user_id):
-    """Currently owned leads with handraiser + times_communicated."""
+    """Currently owned leads with handraiser + comm counter, excluding LTF Quiz Funnel."""
     leads = []
     q = f'custom.{FIELD_LEAD_OWNER}:"{user_id}"'
-    for ld in close_paginate_skip("/lead/", {
-        "query": q,
-        # NOTE: times_communicated is the standard Close aggregate-comm counter.
-        # If your Close env returns null here, swap to an /activity/ fallback.
-        "_fields": f"id,times_communicated,custom.{FIELD_HANDRAISER}",
-    }):
+    fields = (
+        f"id,times_communicated,"
+        f"custom.{FIELD_HANDRAISER},"
+        f"custom.{FIELD_FUNNEL_NAME}"
+    )
+    for ld in close_paginate_skip("/lead/", {"query": q, "_fields": fields}):
+        funnel = get_custom(ld, FIELD_FUNNEL_NAME)
+        if funnel in EXCLUDED_FUNNELS:
+            continue
         leads.append({
             "id": ld.get("id"),
             "handraiser": get_custom(ld, FIELD_HANDRAISER),
@@ -346,7 +366,7 @@ def fetch_activity_mtd(user_id, month_start):
 
 
 def fetch_calls_booked_mtd(user_id, month_start, month_end):
-    """Leads where First Sales Call Booked Date in MTD AND owner = rep."""
+    """Leads where First Sales Call Booked Date in MTD AND owner = rep, excluding LTF."""
     start_d = month_start.date().isoformat()
     end_d   = (month_end - timedelta(seconds=1)).date().isoformat()
     q = (
@@ -354,27 +374,82 @@ def fetch_calls_booked_mtd(user_id, month_start, month_end):
         f'custom.{FIELD_FIRST_CALL_BOOKED}>="{start_d}" '
         f'custom.{FIELD_FIRST_CALL_BOOKED}<="{end_d}"'
     )
-    return close_count("/lead/", {"query": q, "_fields": "id"})
+    count = 0
+    for ld in close_paginate_skip("/lead/", {
+        "query": q,
+        "_fields": f"id,custom.{FIELD_FUNNEL_NAME}",
+    }):
+        if get_custom(ld, FIELD_FUNNEL_NAME) in EXCLUDED_FUNNELS:
+            continue
+        count += 1
+    return count
 
 
 def fetch_deals_mtd(user_id, month_start, month_end):
-    """(won_count, lost_count) for opportunities owned by this rep MTD."""
+    """(won_count, lost_count) for opportunities by this rep in MTD, excluding LTF.
+
+    Close's /opportunity/ endpoint accepts `date_won__gte/lt` (server-side filter,
+    works fine for won deals), but it does NOT accept `date_lost__gte/lt` as URL
+    params — those filters are silently ignored, returning the rep's ENTIRE
+    lifetime of lost opps. So for lost we paginate all and filter client-side
+    on each opp's `date_lost` field.
+
+    LTF exclusion is done by looking up each qualifying opp's lead funnel.
+    """
     start_iso = month_start.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     end_iso   = month_end.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
-    won = close_count("/opportunity/", {
+    # ---- Won: date filter works server-side --------------------------------
+    won_lead_ids = []
+    for opp in close_paginate_skip("/opportunity/", {
         "user_id": user_id,
         "status_type": "won",
         "date_won__gte": start_iso,
         "date_won__lt":  end_iso,
-    })
-    lost = close_count("/opportunity/", {
+        "_fields": "id,lead_id,date_won",
+    }):
+        if opp.get("lead_id"):
+            won_lead_ids.append(opp["lead_id"])
+
+    # ---- Lost: date filter doesn't work, must filter client-side ------------
+    lost_lead_ids = []
+    for opp in close_paginate_skip("/opportunity/", {
         "user_id": user_id,
         "status_type": "lost",
-        "date_lost__gte": start_iso,
-        "date_lost__lt":  end_iso,
-    })
-    return won, lost
+        "_fields": "id,lead_id,date_lost",
+    }):
+        date_lost = opp.get("date_lost")
+        if not date_lost:
+            continue
+        try:
+            dt = datetime.fromisoformat(date_lost.replace("Z", "+00:00"))
+        except ValueError:
+            continue
+        # Compare in UTC. month_start is PT-tz-aware; .astimezone(utc) for apples-to-apples.
+        dt_utc = dt.astimezone(timezone.utc)
+        if not (month_start.astimezone(timezone.utc) <= dt_utc
+                < month_end.astimezone(timezone.utc)):
+            continue
+        if opp.get("lead_id"):
+            lost_lead_ids.append(opp["lead_id"])
+
+    # ---- LTF exclusion: look up each unique lead's funnel once -------------
+    unique_leads = set(won_lead_ids + lost_lead_ids)
+    funnel_cache = {}
+    for lid in unique_leads:
+        try:
+            ld = close_get(f"/lead/{lid}/",
+                           {"_fields": f"id,custom.{FIELD_FUNNEL_NAME}"})
+            funnel_cache[lid] = get_custom(ld, FIELD_FUNNEL_NAME)
+        except requests.HTTPError:
+            # lead may be deleted/merged; treat as unknown funnel (don't exclude)
+            funnel_cache[lid] = None
+
+    def _count_non_ltf(lead_id_list):
+        return sum(1 for lid in lead_id_list
+                   if funnel_cache.get(lid) not in EXCLUDED_FUNNELS)
+
+    return _count_non_ltf(won_lead_ids), _count_non_ltf(lost_lead_ids)
 
 
 def build_rep_row(rep, month_start, month_end):
@@ -422,7 +497,7 @@ def main():
     print(f"Month: {month_label} ({month_start.date()} → "
           f"{(month_end - timedelta(days=1)).date()})\n", flush=True)
 
-    calendar_counts = fetch_calendar(month_start, month_end)
+    calendar_counts, calendar_breakdowns = fetch_calendar(month_start, month_end)
 
     # Backfill every day in the month with 0 so the calendar grid is complete
     full_calendar = {
@@ -440,6 +515,7 @@ def main():
         "month_start": month_start.date().isoformat(),
         "month_end": (month_end - timedelta(days=1)).date().isoformat(),
         "calendar": full_calendar,
+        "calendar_breakdowns": calendar_breakdowns,
         "reps": reps,
     }
 
