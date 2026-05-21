@@ -191,13 +191,14 @@ def fetch_calendar(month_start, month_end):
     candidates = []         # list of (pt_date_iso, lead_id)
     lead_ids = set()        # for funnel lookup
 
-    # Close /event/ filters by date_created (when the event was logged).
-    # There is no date_updated field on events.
+    # Close /event/ filters by `date_updated`. Upper bound is unnecessary
+    # because we always query the current month and the script runs in real
+    # time — events from past months won't satisfy `date_updated__gte=<month_start>`.
+    # (Close also rejects `__lt`; only `__gte` / `__lte` are accepted.)
     params = {
         "object_type": "lead",
         "action": "updated",
-        "date_created__gte": month_start.astimezone(timezone.utc).isoformat(),
-        "date_created__lt":  month_end.astimezone(timezone.utc).isoformat(),
+        "date_updated__gte": month_start.astimezone(timezone.utc).isoformat(),
     }
 
     page_count = 0
@@ -216,8 +217,10 @@ def fetch_calendar(month_start, month_end):
         if not lead_id:
             continue
 
-        # Events carry date_created (when the event was logged).
-        ts = ev.get("date_created") or ev.get("date_updated")
+        # Events carry both date_created (original) and date_updated (latest
+        # action — Close consolidates close-in-time updates). Use date_updated
+        # to bucket the lead into the day the latest assignment landed on.
+        ts = ev.get("date_updated") or ev.get("date_created")
         if not ts:
             continue
         try:
