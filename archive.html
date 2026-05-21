@@ -83,6 +83,37 @@
   .cal-cell.heat-4 .cal-day-num { color: var(--accent-text); }
   .cal-cell.heat-5 .cal-count { color: var(--surface); }
 
+  .cal-breakdown {
+    display: none; position: absolute;
+    bottom: calc(100% + 6px); left: 50%; transform: translateX(-50%);
+    z-index: 30; background: var(--text); color: var(--surface);
+    border-radius: 6px; padding: 10px 12px; min-width: 220px; max-width: 320px;
+    box-shadow: 0 4px 14px rgba(0,0,0,0.25);
+    font-size: 12px; line-height: 1.4; pointer-events: none;
+  }
+  .cal-breakdown::after {
+    content: ''; position: absolute; top: 100%; left: 50%;
+    transform: translateX(-50%);
+    border: 5px solid transparent; border-top-color: var(--text);
+  }
+  .cal-breakdown .cal-bd-head {
+    font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em;
+    color: rgba(255,255,255,0.55); margin-bottom: 6px; font-weight: 500;
+  }
+  .cal-breakdown .cal-bd-row { display: flex; gap: 8px; align-items: baseline; }
+  .cal-breakdown .cal-bd-count {
+    font-family: 'Geist Mono', ui-monospace, monospace;
+    font-variant-numeric: tabular-nums; font-weight: 500;
+    min-width: 26px; text-align: right; color: var(--surface);
+  }
+  .cal-breakdown .cal-bd-label { color: rgba(255,255,255,0.85); }
+  .cal-breakdown .cal-bd-label.unset { font-style: italic; color: rgba(255,255,255,0.55); }
+  .cal-cell:hover .cal-breakdown { display: block; }
+  .cal-grid > .cal-cell:nth-child(7n+1) .cal-breakdown { left: 0; transform: none; }
+  .cal-grid > .cal-cell:nth-child(7n+1) .cal-breakdown::after { left: 20px; transform: none; }
+  .cal-grid > .cal-cell:nth-child(7n) .cal-breakdown { left: auto; right: 0; transform: none; }
+  .cal-grid > .cal-cell:nth-child(7n) .cal-breakdown::after { left: auto; right: 20px; transform: none; }
+
   .reps-table-wrap { overflow-x: auto; }
   table.reps { width: 100%; border-collapse: collapse; font-size: 13.5px; }
   .reps th, .reps td { padding: 12px 14px; text-align: left;
@@ -178,8 +209,24 @@ function heatClass(count, maxCount) {
   return 'heat-1';
 }
 
+function renderCalBreakdown(dayKey, count, breakdown) {
+  const entries = Object.entries(breakdown || {});
+  if (!entries.length) return '';
+  const rows = entries.map(([label, cnt]) => `
+    <div class="cal-bd-row">
+      <span class="cal-bd-count">${cnt}</span>
+      <span class="cal-bd-label ${label === '(unset)' ? 'unset' : ''}">${label}</span>
+    </div>
+  `).join('');
+  return `<div class="cal-breakdown">
+    <div class="cal-bd-head">${dayKey} · ${count} lead${count === 1 ? '' : 's'} assigned</div>
+    ${rows}
+  </div>`;
+}
+
 function renderCalendar(data) {
   const cal = data.calendar || {};
+  const breakdowns = data.calendar_breakdowns || {};
   const days = Object.keys(cal).sort();
   if (!days.length) return '<div class="calendar"><em>No days.</em></div>';
   const first = dateFromKey(days[0]);
@@ -199,10 +246,12 @@ function renderCalendar(data) {
       (dow === 0 || dow === 6) ? 'weekend' : '',
       !isFuture ? heatClass(c, maxCount) : '',
     ].filter(Boolean).join(' ');
+    const popover = (c > 0 && !isFuture) ? renderCalBreakdown(k, c, breakdowns[k]) : '';
     cells.push(`
-      <div class="${klass}" title="${k}: ${c} leads assigned">
+      <div class="${klass}">
         <span class="cal-day-num">${d.getUTCDate()}</span>
         <span class="cal-count">${isFuture ? '' : c}</span>
+        ${popover}
       </div>
     `);
   }
