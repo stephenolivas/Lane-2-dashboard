@@ -208,6 +208,18 @@ def days_in_month(month_start, month_end):
     return days
 
 
+def business_days_elapsed(now):
+    """Count business days (Mon-Fri) from the 1st of the month through today inclusive."""
+    d = now.replace(day=1).date()
+    end_d = now.date()
+    count = 0
+    while d <= end_d:
+        if d.weekday() < 5:   # 0=Mon ... 4=Fri
+            count += 1
+        d += timedelta(days=1)
+    return max(count, 1)   # avoid divide-by-zero on day-1 weekend edge case
+
+
 # ============================================================================
 # CALENDAR — leads assigned to Lane 2 reps per day
 # ============================================================================
@@ -216,20 +228,22 @@ def fetch_calendar(month_start, month_end):
     """
     Walks /event/ for object_type=lead, action=updated, since month_start.
     For each event whose lead-owner custom field changed to a Lane 2 rep AND
-    whose lead is not on the LTF Quiz Funnel, records (lead_id, PT calendar day).
-    Funnel + handraiser are read from the event's `data` payload — no separate lookups.
-    Dedupes per (lead, day) so a same-day bounce counts once.
+    whose lead is not on the LTF Quiz Funnel, records (lead_id, PT calendar day,
+    new_owner, handraiser). Dedupes per (lead, day) — events come latest-first
+    from Close so the first event we see for a (lead, day) is the most recent
+    assignment of that day; that rep gets credit.
 
-    Returns (counts, breakdowns):
-      counts:     dict[YYYY-MM-DD] -> int    (total leads that day)
-      breakdowns: dict[YYYY-MM-DD] -> dict[handraiser_value] -> int
-                  (per-day handraiser breakdown; "(unset)" used for missing values)
+    Returns (counts, breakdowns, per_rep_per_day):
+      counts:          dict[YYYY-MM-DD] -> int       (total leads that day)
+      breakdowns:      dict[YYYY-MM-DD] -> {handraiser: int}
+      per_rep_per_day: dict[YYYY-MM-DD] -> {user_id: int}
     """
     print(f"[calendar] scanning lead.updated events "
           f"{month_start.date()} → {month_end.date()}", flush=True)
 
-    per_day = defaultdict(set)              # day_str -> set of lead_ids
-    per_day_handraiser = defaultdict(dict)  # day_str -> {lead_id: handraiser}
+    # day_str -> {lead_id: (owner_user_id, handraiser_value)}
+    # We use a dict so we keep only the FIRST (= latest) event per (lead, day).
+    per_day_lead = defaultdict(dict)
     excluded_funnel_count = 0
     not_owner_change = 0
     not_lane2 = 0
@@ -247,7 +261,8 @@ def fetch_calendar(month_start, month_end):
         if event_count % 1000 == 0:
             page_count = event_count // 50
             print(f"  [calendar] scanned {event_count} events "
-                  f"(~{page_count} pages), {sum(len(s) for s in per_day.values())} qualifying so far",
+                  f"(~{page_count} pages), "
+                  f"{sum(len(d) for d in per_day_lead.values())} qualifying so far",
                   flush=True)
 
         data = ev.get("data") or {}
@@ -279,12 +294,13 @@ def fetch_calendar(month_start, month_end):
             continue
         pt_date = dt.astimezone(TIMEZONE).date().isoformat()
 
-        if lead_id in per_day[pt_date]:
-            continue   # dedupe: lead already counted for this day
-        per_day[pt_date].add(lead_id)
+        # First event we see for a (lead, day) wins (= latest, since events
+        # are ordered date_updated desc by Close).
+        if lead_id in per_day_lead[pt_date]:
+            continue
 
         handraiser = get_custom(data, FIELD_HANDRAISER) or "(unset)"
-        per_day_handraiser[pt_date][lead_id] = handraiser
+        per_day_lead[pt_date][lead_id] = (new_owner, handraiser)
 
     print(f"[calendar] scanned {event_count} events total · "
           f"{not_owner_change} non-owner-change · "
@@ -292,23 +308,26 @@ def fetch_calendar(month_start, month_end):
           f"{excluded_funnel_count} LTF excluded",
           flush=True)
 
-    counts = {d: len(s) for d, s in per_day.items()}
+    counts = {}
     breakdowns = {}
-    for day, lead_handraisers in per_day_handraiser.items():
+    per_rep_per_day = {}
+    for day, leads in per_day_lead.items():
+        counts[day] = len(leads)
         bd = defaultdict(int)
-        for h in lead_handraisers.values():
-            bd[h] += 1
-        # Sort by count desc with (unset) last for stable rendering
-        ordered = sorted(
+        rd = defaultdict(int)
+        for owner, hr in leads.values():
+            bd[hr] += 1
+            rd[owner] += 1
+        breakdowns[day] = dict(sorted(
             bd.items(),
             key=lambda kv: (kv[0] == "(unset)", -kv[1], kv[0])
-        )
-        breakdowns[day] = dict(ordered)
+        ))
+        per_rep_per_day[day] = dict(rd)
 
     print(f"[calendar] days with activity: {len(counts)} · "
           f"total qualifying leads: {sum(counts.values())}",
           flush=True)
-    return counts, breakdowns
+    return counts, breakdowns, per_rep_per_day
 
 
 # ============================================================================
@@ -337,36 +356,71 @@ def fetch_owned_leads(user_id):
 
 
 def fetch_activity_mtd(user_id, month_start):
-    """Total activities, outbound calls, outbound emails for this rep MTD.
+    """Returns (total_activities, outbound_calls_total, outbound_emails_total,
+                outbound_calls_per_day, outbound_emails_per_day).
 
-    The generic /activity/ endpoint rejects bare user_id filters
-    ("You must provide a single 'lead_id' filter to use 'user_id'…").
-    Type-specific activity endpoints (/activity/call/, /activity/email/, etc.)
-    accept user_id directly, so we count each type and sum.
-
-    "Total activities" sums the rep-driven communication types: calls, emails,
-    SMS, notes, meetings. System-generated activities (status changes, task
-    completions) are excluded since they don't reflect rep effort.
+    Paginates /activity/call/ and /activity/email/ to capture per-day dates AND
+    direction (we need outbound subsets and per-day buckets for the click popup).
+    Uses cheaper close_count for sms/notes/meetings since we only need their totals
+    for the "# Activities" summary.
     """
     since_iso = month_start.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     base = {"user_id": user_id, "date_created__gte": since_iso}
 
-    calls    = close_count("/activity/call/",    base)
-    emails   = close_count("/activity/email/",   base)
+    # Paginated: calls + emails (need date + direction for buckets)
+    total_calls = 0
+    outbound_calls_total = 0
+    outbound_calls_per_day = defaultdict(int)
+    for act in close_paginate_skip("/activity/call/", base):
+        total_calls += 1
+        if (act.get("direction") or "").lower() == "outbound":
+            outbound_calls_total += 1
+            ts = act.get("date_created")
+            if ts:
+                try:
+                    dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+                    outbound_calls_per_day[dt.astimezone(TIMEZONE).date().isoformat()] += 1
+                except ValueError:
+                    pass
+
+    total_emails = 0
+    outbound_emails_total = 0
+    outbound_emails_per_day = defaultdict(int)
+    for act in close_paginate_skip("/activity/email/", base):
+        total_emails += 1
+        # Close uses "outgoing" for emails; accept "outbound" too defensively
+        if (act.get("direction") or "").lower() in ("outgoing", "outbound"):
+            outbound_emails_total += 1
+            ts = act.get("date_created")
+            if ts:
+                try:
+                    dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+                    outbound_emails_per_day[dt.astimezone(TIMEZONE).date().isoformat()] += 1
+                except ValueError:
+                    pass
+
+    # Cheaper: just totals for SMS / notes / meetings
     sms      = close_count("/activity/sms/",     base)
     notes    = close_count("/activity/note/",    base)
     meetings = close_count("/activity/meeting/", base)
-    total = calls + emails + sms + notes + meetings
 
-    # Outbound subsets. Close uses "outbound" for calls and "outgoing" for emails.
-    ob_calls  = close_count("/activity/call/",  {**base, "direction": "outbound"})
-    ob_emails = close_count("/activity/email/", {**base, "direction": "outgoing"})
-
-    return total, ob_calls, ob_emails
+    total = total_calls + total_emails + sms + notes + meetings
+    return (
+        total,
+        outbound_calls_total,
+        outbound_emails_total,
+        dict(outbound_calls_per_day),
+        dict(outbound_emails_per_day),
+    )
 
 
 def fetch_calls_booked_mtd(user_id, month_start, month_end):
-    """Leads where First Sales Call Booked Date in MTD AND owner = rep, excluding LTF."""
+    """Returns (total_count, per_day_dict).
+
+    A "call booked" = a lead owned by this rep whose `First Sales Call Booked Date`
+    falls in MTD. The custom field stores the scheduled call date, which we use
+    directly to bucket the calendar day. Excludes LTF Quiz Funnel.
+    """
     start_d = month_start.date().isoformat()
     end_d   = (month_end - timedelta(seconds=1)).date().isoformat()
     q = (
@@ -374,33 +428,41 @@ def fetch_calls_booked_mtd(user_id, month_start, month_end):
         f'custom.{FIELD_FIRST_CALL_BOOKED}>="{start_d}" '
         f'custom.{FIELD_FIRST_CALL_BOOKED}<="{end_d}"'
     )
-    count = 0
+    per_day = defaultdict(int)
+    total = 0
     for ld in close_paginate_skip("/lead/", {
         "query": q,
-        "_fields": f"id,custom.{FIELD_FUNNEL_NAME}",
+        "_fields": (
+            f"id,custom.{FIELD_FUNNEL_NAME},"
+            f"custom.{FIELD_FIRST_CALL_BOOKED}"
+        ),
     }):
         if get_custom(ld, FIELD_FUNNEL_NAME) in EXCLUDED_FUNNELS:
             continue
-        count += 1
-    return count
+        booked_date = get_custom(ld, FIELD_FIRST_CALL_BOOKED)
+        if not booked_date:
+            continue
+        # The field is stored as YYYY-MM-DD; take the first 10 chars defensively.
+        day = booked_date[:10]
+        per_day[day] += 1
+        total += 1
+    return total, dict(per_day)
 
 
 def fetch_deals_mtd(user_id, month_start, month_end):
-    """(won_count, lost_count) for opportunities by this rep in MTD, excluding LTF.
+    """Returns (won_total, lost_total, won_per_day) for this rep, excluding LTF.
 
-    Close's /opportunity/ endpoint accepts `date_won__gte/lt` (server-side filter,
-    works fine for won deals), but it does NOT accept `date_lost__gte/lt` as URL
-    params — those filters are silently ignored, returning the rep's ENTIRE
-    lifetime of lost opps. So for lost we paginate all and filter client-side
-    on each opp's `date_lost` field.
+    Won: server-side date_won filter works.
+    Lost: server-side date_lost filter is silently ignored by Close, so we
+          paginate ALL of the rep's lost opps and filter on date_lost in Python.
 
-    LTF exclusion is done by looking up each qualifying opp's lead funnel.
+    LTF exclusion: per-lead funnel lookup (cached).
     """
     start_iso = month_start.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     end_iso   = month_end.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
-    # ---- Won: date filter works server-side --------------------------------
-    won_lead_ids = []
+    # Won — list of (lead_id, date_won_str)
+    won_records = []
     for opp in close_paginate_skip("/opportunity/", {
         "user_id": user_id,
         "status_type": "won",
@@ -408,11 +470,13 @@ def fetch_deals_mtd(user_id, month_start, month_end):
         "date_won__lt":  end_iso,
         "_fields": "id,lead_id,date_won",
     }):
-        if opp.get("lead_id"):
-            won_lead_ids.append(opp["lead_id"])
+        if opp.get("lead_id") and opp.get("date_won"):
+            won_records.append((opp["lead_id"], opp["date_won"]))
 
-    # ---- Lost: date filter doesn't work, must filter client-side ------------
-    lost_lead_ids = []
+    # Lost — paginate all, filter client-side on date_lost
+    lost_records = []  # list of lead_ids
+    m_start_utc = month_start.astimezone(timezone.utc)
+    m_end_utc   = month_end.astimezone(timezone.utc)
     for opp in close_paginate_skip("/opportunity/", {
         "user_id": user_id,
         "status_type": "lost",
@@ -425,16 +489,13 @@ def fetch_deals_mtd(user_id, month_start, month_end):
             dt = datetime.fromisoformat(date_lost.replace("Z", "+00:00"))
         except ValueError:
             continue
-        # Compare in UTC. month_start is PT-tz-aware; .astimezone(utc) for apples-to-apples.
-        dt_utc = dt.astimezone(timezone.utc)
-        if not (month_start.astimezone(timezone.utc) <= dt_utc
-                < month_end.astimezone(timezone.utc)):
+        if not (m_start_utc <= dt.astimezone(timezone.utc) < m_end_utc):
             continue
         if opp.get("lead_id"):
-            lost_lead_ids.append(opp["lead_id"])
+            lost_records.append(opp["lead_id"])
 
-    # ---- LTF exclusion: look up each unique lead's funnel once -------------
-    unique_leads = set(won_lead_ids + lost_lead_ids)
+    # LTF exclusion: look up each unique lead's funnel once
+    unique_leads = set(r[0] for r in won_records) | set(lost_records)
     funnel_cache = {}
     for lid in unique_leads:
         try:
@@ -442,17 +503,34 @@ def fetch_deals_mtd(user_id, month_start, month_end):
                            {"_fields": f"id,custom.{FIELD_FUNNEL_NAME}"})
             funnel_cache[lid] = get_custom(ld, FIELD_FUNNEL_NAME)
         except requests.HTTPError:
-            # lead may be deleted/merged; treat as unknown funnel (don't exclude)
             funnel_cache[lid] = None
 
-    def _count_non_ltf(lead_id_list):
-        return sum(1 for lid in lead_id_list
-                   if funnel_cache.get(lid) not in EXCLUDED_FUNNELS)
+    # Won: total + per-day (bucketed by PT)
+    won_total = 0
+    won_per_day = defaultdict(int)
+    for lid, date_won_str in won_records:
+        if funnel_cache.get(lid) in EXCLUDED_FUNNELS:
+            continue
+        won_total += 1
+        try:
+            dt = datetime.fromisoformat(date_won_str.replace("Z", "+00:00"))
+            won_per_day[dt.astimezone(TIMEZONE).date().isoformat()] += 1
+        except ValueError:
+            pass
 
-    return _count_non_ltf(won_lead_ids), _count_non_ltf(lost_lead_ids)
+    lost_total = sum(1 for lid in lost_records
+                     if funnel_cache.get(lid) not in EXCLUDED_FUNNELS)
+
+    return won_total, lost_total, dict(won_per_day)
 
 
-def build_rep_row(rep, month_start, month_end):
+def build_rep_row(rep, month_start, month_end, biz_days, calendar_per_rep_per_day):
+    """Returns (rep_mtd_row, per_day_row_dict).
+
+    per_day_row_dict is keyed by YYYY-MM-DD and contains the per-day metrics
+    used by the calendar click popup: new_leads, outbound_calls, outbound_emails,
+    calls_booked, deals_closed.
+    """
     print(f"[rep] {rep['name']}", flush=True)
     uid = rep["user_id"]
 
@@ -464,11 +542,37 @@ def build_rep_row(rep, month_start, month_end):
         if ld["times_communicated"] == 0:
             zero_comm += 1
 
-    total_acts, ob_calls, ob_emails = fetch_activity_mtd(uid, month_start)
-    calls_booked = fetch_calls_booked_mtd(uid, month_start, month_end)
-    won, lost = fetch_deals_mtd(uid, month_start, month_end)
+    (total_acts,
+     ob_calls_total, ob_emails_total,
+     ob_calls_per_day, ob_emails_per_day) = fetch_activity_mtd(uid, month_start)
 
-    return {
+    calls_booked_total, calls_booked_per_day = fetch_calls_booked_mtd(uid, month_start, month_end)
+    won_total, lost_total, won_per_day      = fetch_deals_mtd(uid, month_start, month_end)
+
+    # Averages per business day so far this month
+    ob_calls_avg  = round(ob_calls_total  / biz_days, 1)
+    ob_emails_avg = round(ob_emails_total / biz_days, 1)
+
+    # Assemble per-day rows for the click popup.
+    all_days = (
+        set(ob_calls_per_day) | set(ob_emails_per_day)
+        | set(calls_booked_per_day) | set(won_per_day)
+    )
+    for day, by_rep in calendar_per_rep_per_day.items():
+        if by_rep.get(uid):
+            all_days.add(day)
+
+    per_day = {}
+    for day in all_days:
+        per_day[day] = {
+            "new_leads":       calendar_per_rep_per_day.get(day, {}).get(uid, 0),
+            "outbound_calls":  ob_calls_per_day.get(day, 0),
+            "outbound_emails": ob_emails_per_day.get(day, 0),
+            "calls_booked":    calls_booked_per_day.get(day, 0),
+            "deals_closed":    won_per_day.get(day, 0),
+        }
+
+    row = {
         "user_id": uid,
         "name": rep["name"],
         "owned_leads": len(leads),
@@ -477,12 +581,17 @@ def build_rep_row(rep, month_start, month_end):
         )),
         "activities_mtd": total_acts,
         "leads_zero_comms": zero_comm,
-        "outbound_calls_mtd": ob_calls,
-        "outbound_emails_mtd": ob_emails,
-        "calls_booked_mtd": calls_booked,
-        "deals_closed_mtd": won,
-        "deals_lost_mtd": lost,
+        # Keep totals in the JSON (useful for the side panel) but the dashboard
+        # rep-details table displays the averages by default per user request.
+        "outbound_calls_mtd": ob_calls_total,
+        "outbound_emails_mtd": ob_emails_total,
+        "outbound_calls_per_day_avg":  ob_calls_avg,
+        "outbound_emails_per_day_avg": ob_emails_avg,
+        "calls_booked_mtd": calls_booked_total,
+        "deals_closed_mtd": won_total,
+        "deals_lost_mtd": lost_total,
     }
+    return row, per_day
 
 
 # ============================================================================
@@ -493,11 +602,13 @@ def main():
     started = time.time()
     now = now_pt()
     month_start, month_end, month_label = month_bounds(now)
+    biz_days = business_days_elapsed(now)
     print(f"Run: {now.isoformat()}", flush=True)
     print(f"Month: {month_label} ({month_start.date()} → "
-          f"{(month_end - timedelta(days=1)).date()})\n", flush=True)
+          f"{(month_end - timedelta(days=1)).date()})  ·  "
+          f"business days elapsed: {biz_days}\n", flush=True)
 
-    calendar_counts, calendar_breakdowns = fetch_calendar(month_start, month_end)
+    calendar_counts, calendar_breakdowns, calendar_per_rep_per_day = fetch_calendar(month_start, month_end)
 
     # Backfill every day in the month with 0 so the calendar grid is complete
     full_calendar = {
@@ -506,7 +617,20 @@ def main():
     }
 
     print("", flush=True)
-    reps = [build_rep_row(r, month_start, month_end) for r in LANE_2_REPS]
+    reps = []
+    daily_breakdowns = {}   # day -> {user_id: {name, new_leads, outbound_calls, ...}}
+    for rep_cfg in LANE_2_REPS:
+        rep_row, per_day = build_rep_row(
+            rep_cfg, month_start, month_end, biz_days, calendar_per_rep_per_day
+        )
+        reps.append(rep_row)
+        for day, metrics in per_day.items():
+            if day not in daily_breakdowns:
+                daily_breakdowns[day] = {}
+            daily_breakdowns[day][rep_cfg["user_id"]] = {
+                "name": rep_cfg["name"],
+                **metrics,
+            }
     reps.sort(key=lambda x: x["owned_leads"], reverse=True)
 
     output = {
@@ -514,8 +638,11 @@ def main():
         "month": month_label,
         "month_start": month_start.date().isoformat(),
         "month_end": (month_end - timedelta(days=1)).date().isoformat(),
+        "today": now.date().isoformat(),
+        "business_days_elapsed": biz_days,
         "calendar": full_calendar,
         "calendar_breakdowns": calendar_breakdowns,
+        "daily_breakdowns": daily_breakdowns,
         "reps": reps,
     }
 
