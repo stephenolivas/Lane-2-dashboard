@@ -317,6 +317,115 @@
   .cal-grid > .cal-cell:nth-child(7n) .cal-breakdown { left: auto; right: 0; transform: none; }
   .cal-grid > .cal-cell:nth-child(7n) .cal-breakdown::after { left: auto; right: 20px; transform: none; }
 
+  /* ── Side panel (day drill-down) ────────────────────────────────────── */
+  .side-overlay {
+    position: fixed; inset: 0;
+    background: rgba(0,0,0,0.25);
+    opacity: 0; pointer-events: none;
+    transition: opacity 0.2s ease;
+    z-index: 90;
+  }
+  .side-overlay.open { opacity: 1; pointer-events: auto; }
+  .side-panel {
+    position: fixed;
+    top: 0; right: 0;
+    width: min(560px, 92vw);
+    height: 100vh;
+    background: var(--surface);
+    box-shadow: -8px 0 24px rgba(0,0,0,0.12);
+    transform: translateX(100%);
+    transition: transform 0.22s ease;
+    z-index: 100;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+  }
+  .side-panel.open { transform: translateX(0); }
+  .side-panel-head {
+    padding: 16px 20px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 12px;
+    position: sticky;
+    top: 0;
+    background: var(--surface);
+    z-index: 1;
+  }
+  .side-panel-head h2 {
+    font-size: 18px;
+    font-weight: 600;
+    margin: 0 0 2px 0;
+    letter-spacing: -0.015em;
+  }
+  .side-panel-head .panel-sub {
+    font-size: 12.5px;
+    color: var(--text-muted);
+  }
+  .side-panel-close {
+    background: transparent;
+    border: 1px solid var(--border-strong);
+    color: var(--text-muted);
+    font-size: 16px;
+    line-height: 1;
+    width: 28px; height: 28px;
+    border-radius: 6px;
+    cursor: pointer;
+    padding: 0;
+    flex-shrink: 0;
+  }
+  .side-panel-close:hover {
+    color: var(--text);
+    border-color: var(--text-muted);
+  }
+  .side-panel-body {
+    padding: 16px 20px 24px;
+    flex: 1;
+  }
+  .side-panel-empty {
+    color: var(--text-muted);
+    text-align: center;
+    padding: 40px 20px;
+  }
+  .panel-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13px;
+  }
+  .panel-table th, .panel-table td {
+    padding: 8px 8px;
+    border-bottom: 1px solid var(--border);
+    text-align: left;
+    vertical-align: middle;
+  }
+  .panel-table th {
+    background: var(--stripe);
+    font-size: 10.5px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--text-muted);
+    font-weight: 500;
+    white-space: nowrap;
+  }
+  .panel-table td.num, .panel-table th.num {
+    text-align: right;
+    font-family: 'Geist Mono', ui-monospace, monospace;
+    font-variant-numeric: tabular-nums;
+  }
+  .panel-table .rep-cell {
+    font-weight: 500;
+    white-space: nowrap;
+  }
+  .panel-table .zero-cell { color: var(--text-subtle); font-weight: 400; }
+  .panel-table tr.panel-totals td {
+    background: var(--stripe);
+    font-weight: 600;
+    border-top: 2px solid var(--border-strong);
+  }
+  /* Hint on hover for clickable calendar days */
+  .cal-cell.has-count { cursor: pointer; }
+
   /* ── Rep table ──────────────────────────────────────────────────────── */
   .reps-table-wrap { overflow-x: auto; }
   table.reps {
@@ -439,8 +548,23 @@
   <div class="loading">Loading dashboard…</div>
 </div>
 
+<div class="side-overlay" id="side-overlay" onclick="closeSidePanel()"></div>
+<aside class="side-panel" id="side-panel" role="dialog" aria-modal="true" aria-labelledby="side-panel-title">
+  <div class="side-panel-head">
+    <div>
+      <h2 id="side-panel-title">Day breakdown</h2>
+      <div class="panel-sub" id="side-panel-sub"></div>
+    </div>
+    <button class="side-panel-close" onclick="closeSidePanel()" aria-label="Close">✕</button>
+  </div>
+  <div class="side-panel-body" id="side-panel-body"></div>
+</aside>
+
 <script>
 const WEEKDAY_LABELS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+
+// Cached so the side-panel click handler can access without re-fetching
+let DATA = null;
 
 function fmtInt(n) {
   if (n == null) return '—';
@@ -527,8 +651,9 @@ function renderCalendar(data) {
       c > 0 ? 'has-count' : ''
     ].filter(Boolean).join(' ');
     const popover = (c > 0 && !isFuture) ? renderCalBreakdown(k, c, breakdowns[k]) : '';
+    const clickAttr = (c > 0 && !isFuture) ? `onclick="openSidePanel('${k}')"` : '';
     cells.push(`
-      <div class="${klass}">
+      <div class="${klass}" ${clickAttr}>
         <span class="cal-day-num">${dayNum}</span>
         <span class="cal-count">${isFuture ? '' : c}</span>
         ${popover}
@@ -571,17 +696,19 @@ function renderReps(data) {
   const reps = data.reps || [];
   if (!reps.length) return '<p style="padding:20px;color:var(--text-muted)">No reps configured.</p>';
 
+  const bizDays = Math.max(data.business_days_elapsed || 1, 1);
+
   // Aggregate handraiser breakdown for the totals row
   const aggBreak = {};
-  let aggOwned = 0, aggActs = 0, aggZero = 0, aggCalls = 0, aggEmails = 0,
+  let aggOwned = 0, aggActs = 0, aggZero = 0, aggCallsMtd = 0, aggEmailsMtd = 0,
       aggBooked = 0, aggWon = 0, aggLost = 0;
 
   for (const r of reps) {
     aggOwned += r.owned_leads || 0;
     aggActs += r.activities_mtd || 0;
-    aggZero += r.zero_comms_leads || 0;
-    aggCalls += r.outbound_calls_mtd || 0;
-    aggEmails += r.outbound_emails_mtd || 0;
+    aggZero += r.leads_zero_comms || 0;
+    aggCallsMtd += r.outbound_calls_mtd || 0;
+    aggEmailsMtd += r.outbound_emails_mtd || 0;
     aggBooked += r.calls_booked_mtd || 0;
     aggWon += r.deals_closed_mtd || 0;
     aggLost += r.deals_lost_mtd || 0;
@@ -589,9 +716,13 @@ function renderReps(data) {
       aggBreak[k] = (aggBreak[k] || 0) + v;
     }
   }
+  const aggCallsAvg  = (aggCallsMtd  / bizDays).toFixed(1);
+  const aggEmailsAvg = (aggEmailsMtd / bizDays).toFixed(1);
+
+  const fmtAvg = (n) => (n == null ? '—' : Number(n).toFixed(1));
 
   const rows = reps.map(r => {
-    const zeroAttn = (r.zero_comms_leads || 0) > 0;
+    const zeroAttn = (r.leads_zero_comms || 0) > 0;
     return `
       <tr>
         <td>
@@ -605,9 +736,9 @@ function renderReps(data) {
           ${renderBreakdown(r.handraiser_breakdown)}
         </td>
         <td class="num">${fmtInt(r.activities_mtd)}</td>
-        <td class="num zero-cell ${zeroAttn ? 'attention' : ''}">${fmtInt(r.zero_comms_leads)}</td>
-        <td class="num">${fmtInt(r.outbound_calls_mtd)}</td>
-        <td class="num">${fmtInt(r.outbound_emails_mtd)}</td>
+        <td class="num zero-cell ${zeroAttn ? 'attention' : ''}">${fmtInt(r.leads_zero_comms)}</td>
+        <td class="num" title="${r.outbound_calls_mtd || 0} total / ${bizDays} business days">${fmtAvg(r.outbound_calls_per_day_avg)}</td>
+        <td class="num" title="${r.outbound_emails_mtd || 0} total / ${bizDays} business days">${fmtAvg(r.outbound_emails_per_day_avg)}</td>
         <td class="num">${fmtInt(r.calls_booked_mtd)}</td>
         <td class="num">${fmtInt(r.deals_closed_mtd)}</td>
         <td class="num">${fmtInt(r.deals_lost_mtd)}</td>
@@ -624,8 +755,8 @@ function renderReps(data) {
             <th># Owned Leads</th>
             <th class="num"># Activities</th>
             <th class="num">Leads w/ 0 Comms</th>
-            <th class="num"># Outbound Calls</th>
-            <th class="num"># Outbound Emails</th>
+            <th class="num">Outbound Calls /day</th>
+            <th class="num">Outbound Emails /day</th>
             <th class="num">Calls Booked</th>
             <th class="num">Deals Closed</th>
             <th class="num">Deals Lost</th>
@@ -641,8 +772,8 @@ function renderReps(data) {
             </td>
             <td class="num">${fmtInt(aggActs)}</td>
             <td class="num">${fmtInt(aggZero)}</td>
-            <td class="num">${fmtInt(aggCalls)}</td>
-            <td class="num">${fmtInt(aggEmails)}</td>
+            <td class="num" title="${aggCallsMtd} total / ${bizDays} business days">${aggCallsAvg}</td>
+            <td class="num" title="${aggEmailsMtd} total / ${bizDays} business days">${aggEmailsAvg}</td>
             <td class="num">${fmtInt(aggBooked)}</td>
             <td class="num">${fmtInt(aggWon)}</td>
             <td class="num">${fmtInt(aggLost)}</td>
@@ -654,16 +785,17 @@ function renderReps(data) {
 }
 
 function render(data) {
-  const totalCalendar = data.total_assignments_mtd || 0;
+  const totalCalendar = Object.values(data.calendar || {}).reduce((s, n) => s + (n || 0), 0);
   const totalOwned = (data.reps || []).reduce((s, r) => s + (r.owned_leads || 0), 0);
-  const totalZero = (data.reps || []).reduce((s, r) => s + (r.zero_comms_leads || 0), 0);
+  const totalZero = (data.reps || []).reduce((s, r) => s + (r.leads_zero_comms || 0), 0);
   const totalBooked = (data.reps || []).reduce((s, r) => s + (r.calls_booked_mtd || 0), 0);
+  const monthLabel = data.month || data.month_label || '';
 
   document.getElementById('root').innerHTML = `
     <header class="dash-header">
       <div class="title-block">
         <h1>Lane 2 Activity</h1>
-        <div class="subtitle">${data.month_label || ''} · Lane 2 lead assignments &amp; rep activity</div>
+        <div class="subtitle">${monthLabel} · Lane 2 lead assignments &amp; rep activity</div>
       </div>
       <div class="header-meta">
         <span><span class="live-dot"></span>Updated ${fmtUpdated(data.generated_at)}</span>
@@ -692,8 +824,8 @@ function render(data) {
 
     <section class="section">
       <div class="section-head">
-        <h2>Lead assignments — ${data.month_label || ''}</h2>
-        <span class="helper">All assignment events to Lane 2 reps, deduped per lead per day. Excludes LTF - Quiz Funnel.</span>
+        <h2>Lead assignments — ${monthLabel}</h2>
+        <span class="helper">Click any day for a per-rep breakdown. Hover for handraiser mix.</span>
       </div>
       ${renderCalendar(data)}
     </section>
@@ -717,12 +849,114 @@ async function main() {
     const resp = await fetch('data.json', { cache: 'no-store' });
     if (!resp.ok) throw new Error('HTTP ' + resp.status);
     const data = await resp.json();
+    DATA = data;
     render(data);
   } catch (e) {
     document.getElementById('root').innerHTML =
       `<div class="error">Failed to load data.json — ${e.message}</div>`;
   }
 }
+
+// ── Side panel: day drill-down ──────────────────────────────────────────
+
+function fmtDayHeading(dayKey) {
+  const [y, m, d] = dayKey.split('-').map(Number);
+  const dt = new Date(Date.UTC(y, m - 1, d, 12));
+  return dt.toLocaleDateString('en-US', {
+    weekday: 'long', month: 'long', day: 'numeric', year: 'numeric',
+    timeZone: 'UTC'
+  });
+}
+
+function openSidePanel(dayKey) {
+  if (!DATA) return;
+  const totalLeads = (DATA.calendar || {})[dayKey] || 0;
+  const breakdownByRep = (DATA.daily_breakdowns || {})[dayKey] || {};
+  const handraisers = (DATA.calendar_breakdowns || {})[dayKey] || {};
+
+  // Title + sub
+  document.getElementById('side-panel-title').textContent = fmtDayHeading(dayKey);
+  const handraisersText = Object.entries(handraisers)
+    .map(([label, n]) => `${n} ${label}`)
+    .join(' · ');
+  document.getElementById('side-panel-sub').innerHTML =
+    `<strong class="num">${totalLeads}</strong> lead${totalLeads === 1 ? '' : 's'} assigned`
+    + (handraisersText ? `<br><span style="color:var(--text-subtle)">${handraisersText}</span>` : '');
+
+  // Body: per-rep table
+  const reps = Object.values(breakdownByRep).filter(r =>
+    (r.new_leads || 0) + (r.outbound_calls || 0) + (r.outbound_emails || 0)
+    + (r.calls_booked || 0) + (r.deals_closed || 0) > 0
+  );
+  reps.sort((a, b) => (b.new_leads || 0) - (a.new_leads || 0)
+                       || (b.outbound_calls || 0) - (a.outbound_calls || 0));
+
+  const body = document.getElementById('side-panel-body');
+  if (!reps.length) {
+    body.innerHTML = '<div class="side-panel-empty">No rep activity recorded for this day.</div>';
+  } else {
+    let totalNew = 0, totalCalls = 0, totalEmails = 0, totalBooked = 0, totalWon = 0;
+    const rows = reps.map(r => {
+      totalNew    += r.new_leads || 0;
+      totalCalls  += r.outbound_calls || 0;
+      totalEmails += r.outbound_emails || 0;
+      totalBooked += r.calls_booked || 0;
+      totalWon    += r.deals_closed || 0;
+      const dim = (n) => (n ? '' : 'zero-cell');
+      return `<tr>
+        <td class="rep-cell">${r.name}</td>
+        <td class="num ${dim(r.new_leads)}">${fmtInt(r.new_leads)}</td>
+        <td class="num ${dim(r.outbound_calls)}">${fmtInt(r.outbound_calls)}</td>
+        <td class="num ${dim(r.outbound_emails)}">${fmtInt(r.outbound_emails)}</td>
+        <td class="num ${dim(r.calls_booked)}">${fmtInt(r.calls_booked)}</td>
+        <td class="num ${dim(r.deals_closed)}">${fmtInt(r.deals_closed)}</td>
+      </tr>`;
+    }).join('');
+
+    body.innerHTML = `
+      <table class="panel-table">
+        <thead>
+          <tr>
+            <th>Rep</th>
+            <th class="num">New Leads</th>
+            <th class="num">Outbound Calls</th>
+            <th class="num">Outbound Emails</th>
+            <th class="num">Calls Booked</th>
+            <th class="num">Deals Closed</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${rows}
+          <tr class="panel-totals">
+            <td>Total</td>
+            <td class="num">${fmtInt(totalNew)}</td>
+            <td class="num">${fmtInt(totalCalls)}</td>
+            <td class="num">${fmtInt(totalEmails)}</td>
+            <td class="num">${fmtInt(totalBooked)}</td>
+            <td class="num">${fmtInt(totalWon)}</td>
+          </tr>
+        </tbody>
+      </table>
+    `;
+  }
+
+  document.getElementById('side-panel').classList.add('open');
+  document.getElementById('side-overlay').classList.add('open');
+}
+
+function closeSidePanel() {
+  document.getElementById('side-panel').classList.remove('open');
+  document.getElementById('side-overlay').classList.remove('open');
+}
+
+// Allow ESC to close the panel
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') closeSidePanel();
+});
+
+// Expose to inline onclick handlers in the calendar HTML
+window.openSidePanel = openSidePanel;
+window.closeSidePanel = closeSidePanel;
 
 main();
 </script>
