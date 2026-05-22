@@ -150,6 +150,39 @@
     .reps th, .reps td { padding: 10px 8px; font-size: 12.5px; }
     .picker { flex-wrap: wrap; }
   }
+
+  /* ── Side panel (day drill-down) ────────────────────────────────────── */
+  .side-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.25);
+    opacity: 0; pointer-events: none; transition: opacity 0.2s ease; z-index: 90; }
+  .side-overlay.open { opacity: 1; pointer-events: auto; }
+  .side-panel { position: fixed; top: 0; right: 0; width: min(560px, 92vw); height: 100vh;
+    background: var(--surface); box-shadow: -8px 0 24px rgba(0,0,0,0.12);
+    transform: translateX(100%); transition: transform 0.22s ease; z-index: 100;
+    overflow-y: auto; display: flex; flex-direction: column; }
+  .side-panel.open { transform: translateX(0); }
+  .side-panel-head { padding: 16px 20px; border-bottom: 1px solid var(--border);
+    display: flex; align-items: flex-start; justify-content: space-between; gap: 12px;
+    position: sticky; top: 0; background: var(--surface); z-index: 1; }
+  .side-panel-head h2 { font-size: 18px; font-weight: 600; margin: 0 0 2px 0; letter-spacing: -0.015em; }
+  .side-panel-head .panel-sub { font-size: 12.5px; color: var(--text-muted); }
+  .side-panel-close { background: transparent; border: 1px solid var(--border-strong);
+    color: var(--text-muted); font-size: 16px; line-height: 1; width: 28px; height: 28px;
+    border-radius: 6px; cursor: pointer; padding: 0; flex-shrink: 0; }
+  .side-panel-close:hover { color: var(--text); border-color: var(--text-muted); }
+  .side-panel-body { padding: 16px 20px 24px; flex: 1; }
+  .side-panel-empty { color: var(--text-muted); text-align: center; padding: 40px 20px; }
+  .panel-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  .panel-table th, .panel-table td { padding: 8px 8px; border-bottom: 1px solid var(--border);
+    text-align: left; vertical-align: middle; }
+  .panel-table th { background: var(--stripe); font-size: 10.5px; text-transform: uppercase;
+    letter-spacing: 0.06em; color: var(--text-muted); font-weight: 500; white-space: nowrap; }
+  .panel-table td.num, .panel-table th.num { text-align: right;
+    font-family: 'Geist Mono', ui-monospace, monospace; font-variant-numeric: tabular-nums; }
+  .panel-table .rep-cell { font-weight: 500; white-space: nowrap; }
+  .panel-table .zero-cell { color: var(--text-subtle); font-weight: 400; }
+  .panel-table tr.panel-totals td { background: var(--stripe); font-weight: 600;
+    border-top: 2px solid var(--border-strong); }
+  .cal-cell.has-count { cursor: pointer; }
 </style>
 </head>
 <body>
@@ -173,6 +206,17 @@
   <div id="content">
     <div class="loading">Select a month to view archived data.</div>
   </div>
+<div class="side-overlay" id="side-overlay" onclick="closeSidePanel()"></div>
+<aside class="side-panel" id="side-panel" role="dialog" aria-modal="true">
+  <div class="side-panel-head">
+    <div>
+      <h2 id="side-panel-title">Day breakdown</h2>
+      <div class="panel-sub" id="side-panel-sub"></div>
+    </div>
+    <button class="side-panel-close" onclick="closeSidePanel()" aria-label="Close">✕</button>
+  </div>
+  <div class="side-panel-body" id="side-panel-body"></div>
+</aside>
 </div>
 
 <script>
@@ -247,8 +291,9 @@ function renderCalendar(data) {
       !isFuture ? heatClass(c, maxCount) : '',
     ].filter(Boolean).join(' ');
     const popover = (c > 0 && !isFuture) ? renderCalBreakdown(k, c, breakdowns[k]) : '';
+    const clickAttr = (c > 0 && !isFuture) ? `onclick="openSidePanel('${k}')"` : '';
     cells.push(`
-      <div class="${klass}">
+      <div class="${klass}" ${clickAttr}>
         <span class="cal-day-num">${d.getUTCDate()}</span>
         <span class="cal-count">${isFuture ? '' : c}</span>
         ${popover}
@@ -368,12 +413,15 @@ function render(data) {
   `;
 }
 
+let DATA = null;
+
 async function loadMonth(key) {
   document.getElementById('content').innerHTML = '<div class="loading">Loading ' + monthLabel(key) + '…</div>';
   try {
     const resp = await fetch(`archives/data_${key}.json`, { cache: 'no-store' });
     if (!resp.ok) throw new Error('HTTP ' + resp.status);
     const data = await resp.json();
+    DATA = data;
     render(data);
   } catch (e) {
     document.getElementById('content').innerHTML =
@@ -398,6 +446,63 @@ async function main() {
       `<div class="error">Failed to load archive index: ${e.message}</div>`;
   }
 }
+
+function fmtDayHeading(dayKey) {
+  const [y, m, d] = dayKey.split('-').map(Number);
+  const dt = new Date(Date.UTC(y, m - 1, d, 12));
+  return dt.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric', timeZone: 'UTC' });
+}
+function openSidePanel(dayKey) {
+  if (!DATA) return;
+  const totalLeads = (DATA.calendar || {})[dayKey] || 0;
+  const breakdownByRep = (DATA.daily_breakdowns || {})[dayKey] || {};
+  const handraisers = (DATA.calendar_breakdowns || {})[dayKey] || {};
+  document.getElementById('side-panel-title').textContent = fmtDayHeading(dayKey);
+  const handraisersText = Object.entries(handraisers).map(([l, n]) => `${n} ${l}`).join(' · ');
+  document.getElementById('side-panel-sub').innerHTML =
+    `<strong class="num">${totalLeads}</strong> lead${totalLeads === 1 ? '' : 's'} assigned`
+    + (handraisersText ? `<br><span style="color:var(--text-subtle)">${handraisersText}</span>` : '');
+  const reps = Object.values(breakdownByRep).filter(r =>
+    (r.new_leads || 0) + (r.outbound_calls || 0) + (r.outbound_emails || 0)
+    + (r.calls_booked || 0) + (r.deals_closed || 0) > 0);
+  reps.sort((a, b) => (b.new_leads || 0) - (a.new_leads || 0));
+  const body = document.getElementById('side-panel-body');
+  if (!reps.length) {
+    body.innerHTML = '<div class="side-panel-empty">No rep activity recorded for this day.</div>';
+  } else {
+    let tn=0,tc=0,te=0,tb=0,tw=0;
+    const rows = reps.map(r => {
+      tn += r.new_leads||0; tc += r.outbound_calls||0; te += r.outbound_emails||0;
+      tb += r.calls_booked||0; tw += r.deals_closed||0;
+      const dim = (n) => n ? '' : 'zero-cell';
+      return `<tr>
+        <td class="rep-cell">${r.name}</td>
+        <td class="num ${dim(r.new_leads)}">${fmtInt(r.new_leads)}</td>
+        <td class="num ${dim(r.outbound_calls)}">${fmtInt(r.outbound_calls)}</td>
+        <td class="num ${dim(r.outbound_emails)}">${fmtInt(r.outbound_emails)}</td>
+        <td class="num ${dim(r.calls_booked)}">${fmtInt(r.calls_booked)}</td>
+        <td class="num ${dim(r.deals_closed)}">${fmtInt(r.deals_closed)}</td>
+      </tr>`;
+    }).join('');
+    body.innerHTML = `<table class="panel-table">
+      <thead><tr><th>Rep</th><th class="num">New Leads</th><th class="num">Outbound Calls</th>
+      <th class="num">Outbound Emails</th><th class="num">Calls Booked</th><th class="num">Deals Closed</th></tr></thead>
+      <tbody>${rows}<tr class="panel-totals">
+        <td>Total</td><td class="num">${fmtInt(tn)}</td><td class="num">${fmtInt(tc)}</td>
+        <td class="num">${fmtInt(te)}</td><td class="num">${fmtInt(tb)}</td><td class="num">${fmtInt(tw)}</td>
+      </tr></tbody></table>`;
+  }
+  document.getElementById('side-panel').classList.add('open');
+  document.getElementById('side-overlay').classList.add('open');
+}
+function closeSidePanel() {
+  document.getElementById('side-panel').classList.remove('open');
+  document.getElementById('side-overlay').classList.remove('open');
+}
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeSidePanel(); });
+window.openSidePanel = openSidePanel;
+window.closeSidePanel = closeSidePanel;
+
 main();
 </script>
 </body>
