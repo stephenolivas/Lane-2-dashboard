@@ -1,14 +1,14 @@
 {
-  "generated_at": "2026-06-02T17:23:56.899296-07:00",
+  "generated_at": "2026-06-03T10:56:49.665831-07:00",
   "month": "2026-06",
   "month_start": "2026-06-01",
   "month_end": "2026-06-30",
-  "today": "2026-06-02",
-  "business_days_elapsed": 2,
+  "today": "2026-06-03",
+  "business_days_elapsed": 3,
   "calendar": {
     "2026-06-01": 693,
-    "2026-06-02": 435,
-    "2026-06-03": 0,
+    "2026-06-02": 447,
+    "2026-06-03": 35,
     "2026-06-04": 0,
     "2026-06-05": 0,
     "2026-06-06": 0,
@@ -38,16 +38,22 @@
     "2026-06-30": 0
   },
   "calendar_breakdowns": {
+    "2026-06-03": {
+      "No Activity / Past 14 Days": 12,
+      "30 Day Aged Deals": 4,
+      "LTF Course Purchased / Did Not Book": 2,
+      "(unset)": 17
+    },
     "2026-06-02": {
       "30 Day Aged Deals": 166,
-      "No Activity / Past 14 Days": 75,
+      "No Activity / Past 14 Days": 76,
       "LTF Course Purchased / Did Not Book": 12,
       "LTF Course Purchased / High Activity": 9,
       "Prior Day Lost Deals": 9,
       "No Activity / Past 30 Days": 4,
       "Typeform Entry / Did Not Book": 2,
       "Webinar - Attended / Did Not Book": 1,
-      "(unset)": 157
+      "(unset)": 168
     },
     "2026-06-01": {
       "No Activity / Past 14 Days": 621,
@@ -63,6 +69,64 @@
     }
   },
   "daily_breakdowns": {
+    "2026-06-02": {
+      "user_ulI4pdlkBQGJpFBjSfdf3U2deAXQATVPSAurnbL80T9": {
+        "name": "Bryan Barcus",
+        "new_leads": 14,
+        "outbound_calls": 0,
+        "outbound_emails": 0,
+        "calls_booked": 0,
+        "deals_closed": 0
+      },
+      "user_UpJb11fzX2TuFHf7fFyWpfXr84lg2Ui7i7p5CtQkIaW": {
+        "name": "Cameron Caswell",
+        "new_leads": 30,
+        "outbound_calls": 1,
+        "outbound_emails": 2,
+        "calls_booked": 1,
+        "deals_closed": 0
+      },
+      "user_I0cHZ04mBXXBvbFcnwmsc2KrcMsLsKxqjW8DtJ783Hr": {
+        "name": "Elvis Ellis",
+        "new_leads": 42,
+        "outbound_calls": 3,
+        "outbound_emails": 11,
+        "calls_booked": 1,
+        "deals_closed": 0
+      },
+      "user_WquWudQN7dghZsAPiNY80eJUmg1EadQg2UCQdvgbif7": {
+        "name": "Kelly Schrader",
+        "new_leads": 40,
+        "outbound_calls": 2,
+        "outbound_emails": 0,
+        "calls_booked": 1,
+        "deals_closed": 0
+      },
+      "user_5pAfnzGONQLUVLKqFQVpQ3570YV1gurVCTp1MMgfCDL": {
+        "name": "John Kirk",
+        "new_leads": 98,
+        "outbound_calls": 5,
+        "outbound_emails": 6,
+        "calls_booked": 0,
+        "deals_closed": 0
+      },
+      "user_Bov31jjnHhENBy8uWNTTL8KKax8VX7o6DugLzBYOHBG": {
+        "name": "Lyle Hubbard",
+        "new_leads": 173,
+        "outbound_calls": 2,
+        "outbound_emails": 25,
+        "calls_booked": 2,
+        "deals_closed": 0
+      },
+      "user_MrBLkl5wCqTm7QxHxPo2ydNV5KxMllg6YZDVc12Aqzj": {
+        "name": "Jason Aaron",
+        "new_leads": 50,
+        "outbound_calls": 5,
+        "outbound_emails": 13,
+        "calls_booked": 2,
+        "deals_closed": 0
+      }
+    },
     "2026-06-01": {
       "user_ulI4pdlkBQGJpFBjSfdf3U2deAXQATVPSAurnbL80T9": {
         "name": "Bryan Barcus",
@@ -121,64 +185,6 @@
         "deals_closed": 0
       }
     },
-    "2026-06-02": {
-      "user_ulI4pdlkBQGJpFBjSfdf3U2deAXQATVPSAurnbL80T9": {
-        "name": "Bryan Barcus",
-        "new_leads": 14,
-        "outbound_calls": 0,
-        "outbound_emails": 0,
-        "calls_booked": 0,
-        "deals_closed": 0
-      },
-      "user_UpJb11fzX2TuFHf7fFyWpfXr84lg2Ui7i7p5CtQkIaW": {
-        "name": "Cameron Caswell",
-        "new_leads": 30,
-        "outbound_calls": 1,
-        "outbound_emails": 2,
-        "calls_booked": 1,
-        "deals_closed": 0
-      },
-      "user_I0cHZ04mBXXBvbFcnwmsc2KrcMsLsKxqjW8DtJ783Hr": {
-        "name": "Elvis Ellis",
-        "new_leads": 40,
-        "outbound_calls": 3,
-        "outbound_emails": 11,
-        "calls_booked": 1,
-        "deals_closed": 0
-      },
-      "user_WquWudQN7dghZsAPiNY80eJUmg1EadQg2UCQdvgbif7": {
-        "name": "Kelly Schrader",
-        "new_leads": 40,
-        "outbound_calls": 2,
-        "outbound_emails": 0,
-        "calls_booked": 1,
-        "deals_closed": 0
-      },
-      "user_5pAfnzGONQLUVLKqFQVpQ3570YV1gurVCTp1MMgfCDL": {
-        "name": "John Kirk",
-        "new_leads": 95,
-        "outbound_calls": 5,
-        "outbound_emails": 6,
-        "calls_booked": 0,
-        "deals_closed": 0
-      },
-      "user_Bov31jjnHhENBy8uWNTTL8KKax8VX7o6DugLzBYOHBG": {
-        "name": "Lyle Hubbard",
-        "new_leads": 170,
-        "outbound_calls": 2,
-        "outbound_emails": 25,
-        "calls_booked": 2,
-        "deals_closed": 0
-      },
-      "user_MrBLkl5wCqTm7QxHxPo2ydNV5KxMllg6YZDVc12Aqzj": {
-        "name": "Jason Aaron",
-        "new_leads": 46,
-        "outbound_calls": 5,
-        "outbound_emails": 13,
-        "calls_booked": 2,
-        "deals_closed": 0
-      }
-    },
     "2026-06-04": {
       "user_UpJb11fzX2TuFHf7fFyWpfXr84lg2Ui7i7p5CtQkIaW": {
         "name": "Cameron Caswell",
@@ -188,26 +194,76 @@
         "calls_booked": 1,
         "deals_closed": 0
       },
-      "user_Bov31jjnHhENBy8uWNTTL8KKax8VX7o6DugLzBYOHBG": {
-        "name": "Lyle Hubbard",
-        "new_leads": 0,
-        "outbound_calls": 0,
-        "outbound_emails": 0,
-        "calls_booked": 1,
-        "deals_closed": 0
-      }
-    },
-    "2026-06-03": {
-      "user_WquWudQN7dghZsAPiNY80eJUmg1EadQg2UCQdvgbif7": {
-        "name": "Kelly Schrader",
+      "user_5pAfnzGONQLUVLKqFQVpQ3570YV1gurVCTp1MMgfCDL": {
+        "name": "John Kirk",
         "new_leads": 0,
         "outbound_calls": 0,
         "outbound_emails": 0,
         "calls_booked": 1,
         "deals_closed": 0
       },
+      "user_Bov31jjnHhENBy8uWNTTL8KKax8VX7o6DugLzBYOHBG": {
+        "name": "Lyle Hubbard",
+        "new_leads": 0,
+        "outbound_calls": 0,
+        "outbound_emails": 0,
+        "calls_booked": 3,
+        "deals_closed": 0
+      },
       "user_MrBLkl5wCqTm7QxHxPo2ydNV5KxMllg6YZDVc12Aqzj": {
         "name": "Jason Aaron",
+        "new_leads": 0,
+        "outbound_calls": 0,
+        "outbound_emails": 0,
+        "calls_booked": 3,
+        "deals_closed": 0
+      }
+    },
+    "2026-06-03": {
+      "user_I0cHZ04mBXXBvbFcnwmsc2KrcMsLsKxqjW8DtJ783Hr": {
+        "name": "Elvis Ellis",
+        "new_leads": 7,
+        "outbound_calls": 0,
+        "outbound_emails": 1,
+        "calls_booked": 2,
+        "deals_closed": 0
+      },
+      "user_WquWudQN7dghZsAPiNY80eJUmg1EadQg2UCQdvgbif7": {
+        "name": "Kelly Schrader",
+        "new_leads": 7,
+        "outbound_calls": 2,
+        "outbound_emails": 2,
+        "calls_booked": 2,
+        "deals_closed": 0
+      },
+      "user_5pAfnzGONQLUVLKqFQVpQ3570YV1gurVCTp1MMgfCDL": {
+        "name": "John Kirk",
+        "new_leads": 3,
+        "outbound_calls": 0,
+        "outbound_emails": 1,
+        "calls_booked": 0,
+        "deals_closed": 0
+      },
+      "user_Bov31jjnHhENBy8uWNTTL8KKax8VX7o6DugLzBYOHBG": {
+        "name": "Lyle Hubbard",
+        "new_leads": 6,
+        "outbound_calls": 0,
+        "outbound_emails": 2,
+        "calls_booked": 0,
+        "deals_closed": 0
+      },
+      "user_MrBLkl5wCqTm7QxHxPo2ydNV5KxMllg6YZDVc12Aqzj": {
+        "name": "Jason Aaron",
+        "new_leads": 12,
+        "outbound_calls": 0,
+        "outbound_emails": 18,
+        "calls_booked": 2,
+        "deals_closed": 0
+      }
+    },
+    "2026-06-05": {
+      "user_WquWudQN7dghZsAPiNY80eJUmg1EadQg2UCQdvgbif7": {
+        "name": "Kelly Schrader",
         "new_leads": 0,
         "outbound_calls": 0,
         "outbound_emails": 0,
@@ -230,9 +286,9 @@
     {
       "user_id": "user_Bov31jjnHhENBy8uWNTTL8KKax8VX7o6DugLzBYOHBG",
       "name": "Lyle Hubbard",
-      "owned_leads": 805,
+      "owned_leads": 807,
       "handraiser_breakdown": {
-        "(unset)": 547,
+        "(unset)": 549,
         "No Activity / Past 14 Days": 153,
         "30 Day Aged Deals": 56,
         "No Activity / Past 30 Days": 26,
@@ -242,22 +298,22 @@
         "Internal Webinar": 1,
         "Webinar - Registered / Did Not Attend": 1
       },
-      "activities_mtd": 113,
+      "activities_mtd": 137,
       "leads_zero_comms": 1,
       "outbound_calls_mtd": 2,
-      "outbound_emails_mtd": 71,
-      "outbound_calls_per_day_avg": 1.0,
-      "outbound_emails_per_day_avg": 35.5,
-      "calls_booked_mtd": 3,
+      "outbound_emails_mtd": 73,
+      "outbound_calls_per_day_avg": 0.7,
+      "outbound_emails_per_day_avg": 24.3,
+      "calls_booked_mtd": 5,
       "deals_closed_mtd": 0,
       "deals_lost_mtd": 1
     },
     {
       "user_id": "user_MrBLkl5wCqTm7QxHxPo2ydNV5KxMllg6YZDVc12Aqzj",
       "name": "Jason Aaron",
-      "owned_leads": 774,
+      "owned_leads": 777,
       "handraiser_breakdown": {
-        "(unset)": 576,
+        "(unset)": 579,
         "No Activity / Past 14 Days": 150,
         "No Activity / Past 30 Days": 26,
         "Webinar - Attended / Did Not Book": 13,
@@ -266,23 +322,23 @@
         "Route Builder": 2,
         "LTF Course Purchased / High Activity": 1
       },
-      "activities_mtd": 57,
+      "activities_mtd": 102,
       "leads_zero_comms": 29,
       "outbound_calls_mtd": 5,
-      "outbound_emails_mtd": 23,
-      "outbound_calls_per_day_avg": 2.5,
-      "outbound_emails_per_day_avg": 11.5,
-      "calls_booked_mtd": 5,
+      "outbound_emails_mtd": 41,
+      "outbound_calls_per_day_avg": 1.7,
+      "outbound_emails_per_day_avg": 13.7,
+      "calls_booked_mtd": 9,
       "deals_closed_mtd": 0,
-      "deals_lost_mtd": 0
+      "deals_lost_mtd": 1
     },
     {
       "user_id": "user_5pAfnzGONQLUVLKqFQVpQ3570YV1gurVCTp1MMgfCDL",
       "name": "John Kirk",
-      "owned_leads": 634,
+      "owned_leads": 635,
       "handraiser_breakdown": {
-        "(unset)": 373,
-        "No Activity / Past 14 Days": 149,
+        "(unset)": 375,
+        "No Activity / Past 14 Days": 148,
         "30 Day Aged Deals": 53,
         "No Activity / Past 30 Days": 27,
         "Webinar - Attended / Did Not Book": 14,
@@ -293,38 +349,38 @@
         "Route Builder": 1,
         "Webinar - Registered / Did Not Attend": 1
       },
-      "activities_mtd": 32,
+      "activities_mtd": 45,
       "leads_zero_comms": 4,
       "outbound_calls_mtd": 5,
-      "outbound_emails_mtd": 7,
-      "outbound_calls_per_day_avg": 2.5,
-      "outbound_emails_per_day_avg": 3.5,
-      "calls_booked_mtd": 4,
+      "outbound_emails_mtd": 8,
+      "outbound_calls_per_day_avg": 1.7,
+      "outbound_emails_per_day_avg": 2.7,
+      "calls_booked_mtd": 5,
       "deals_closed_mtd": 0,
       "deals_lost_mtd": 1
     },
     {
       "user_id": "user_WquWudQN7dghZsAPiNY80eJUmg1EadQg2UCQdvgbif7",
       "name": "Kelly Schrader",
-      "owned_leads": 603,
+      "owned_leads": 606,
       "handraiser_breakdown": {
-        "(unset)": 527,
+        "(unset)": 529,
         "No Activity / Past 30 Days": 25,
-        "Webinar - Attended / Did Not Book": 18,
         "30 Day Aged Deals": 18,
-        "LTF Course Purchased / Did Not Book": 6,
+        "Webinar - Attended / Did Not Book": 18,
+        "LTF Course Purchased / Did Not Book": 7,
         "No Activity / Past 14 Days": 5,
         "Typeform Entry / Did Not Book": 2,
         "LTF Course Purchased / High Activity": 1,
         "Route Builder": 1
       },
-      "activities_mtd": 64,
-      "leads_zero_comms": 2,
-      "outbound_calls_mtd": 6,
-      "outbound_emails_mtd": 1,
-      "outbound_calls_per_day_avg": 3.0,
-      "outbound_emails_per_day_avg": 0.5,
-      "calls_booked_mtd": 3,
+      "activities_mtd": 84,
+      "leads_zero_comms": 3,
+      "outbound_calls_mtd": 8,
+      "outbound_emails_mtd": 3,
+      "outbound_calls_per_day_avg": 2.7,
+      "outbound_emails_per_day_avg": 1.0,
+      "calls_booked_mtd": 5,
       "deals_closed_mtd": 0,
       "deals_lost_mtd": 0
     },
@@ -354,26 +410,25 @@
     {
       "user_id": "user_I0cHZ04mBXXBvbFcnwmsc2KrcMsLsKxqjW8DtJ783Hr",
       "name": "Elvis Ellis",
-      "owned_leads": 335,
+      "owned_leads": 338,
       "handraiser_breakdown": {
-        "(unset)": 258,
+        "(unset)": 261,
         "No Activity / Past 30 Days": 27,
         "30 Day Aged Deals": 22,
         "Webinar - Attended / Did Not Book": 17,
-        "No Activity / Past 14 Days": 6,
+        "No Activity / Past 14 Days": 7,
         "LTF Course Purchased / Did Not Book": 3,
-        "Webinar - Registered / Did Not Attend": 1,
-        "Route Builder": 1
+        "Webinar - Registered / Did Not Attend": 1
       },
-      "activities_mtd": 160,
-      "leads_zero_comms": 1,
+      "activities_mtd": 180,
+      "leads_zero_comms": 2,
       "outbound_calls_mtd": 15,
-      "outbound_emails_mtd": 17,
-      "outbound_calls_per_day_avg": 7.5,
-      "outbound_emails_per_day_avg": 8.5,
-      "calls_booked_mtd": 1,
+      "outbound_emails_mtd": 18,
+      "outbound_calls_per_day_avg": 5.0,
+      "outbound_emails_per_day_avg": 6.0,
+      "calls_booked_mtd": 3,
       "deals_closed_mtd": 0,
-      "deals_lost_mtd": 1
+      "deals_lost_mtd": 2
     },
     {
       "user_id": "user_UpJb11fzX2TuFHf7fFyWpfXr84lg2Ui7i7p5CtQkIaW",
@@ -391,8 +446,8 @@
       "leads_zero_comms": 0,
       "outbound_calls_mtd": 1,
       "outbound_emails_mtd": 2,
-      "outbound_calls_per_day_avg": 0.5,
-      "outbound_emails_per_day_avg": 1.0,
+      "outbound_calls_per_day_avg": 0.3,
+      "outbound_emails_per_day_avg": 0.7,
       "calls_booked_mtd": 3,
       "deals_closed_mtd": 0,
       "deals_lost_mtd": 0
