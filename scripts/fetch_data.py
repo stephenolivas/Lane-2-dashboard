@@ -50,11 +50,26 @@ LANE_2_REPS = [
 ]
 LANE_2_USER_IDS = {r["user_id"] for r in LANE_2_REPS}
 
+# Scrapers (a.k.a. setters). They book meetings for the closers.
+# Each entry has the Close user_id (for activity attribution) and the exact
+# string value that the `Reactivation - Setter Name` custom field is set to
+# by the update_field.py automation — see reactivation-setter-name-field.md.
+SCRAPERS = [
+    {"name": "Vince Bartolini",
+     "user_id": "user_dQi0iL0igjCKtEXPSsv8ALDZMAz9orJxL60O7Q921jy",
+     "setter_field_value": "Vince Bartolini"},
+    {"name": "William Nowak",
+     "user_id": "user_ZNKG1S9eI71qxhSozBK4jskTVtJqXzfNCPWqmADRR9F",
+     "setter_field_value": "William Nowak"},
+]
+
 # Close custom field IDs (verified from sibling dashboards)
 FIELD_LEAD_OWNER         = "cf_gOfS9pFwext58oberEegLyix8hZzeHrxhCZOVh3P3rd"
 FIELD_HANDRAISER         = "cf_Q1hRv8It46xsAEmpv4PRKdI1y0sPJnrnQrgRbIlF8uL"
 FIELD_FUNNEL_NAME        = "cf_xqDQE8fkPsWa0RNEve7hcaxKblCe6489XeZGRDzyPdX"
 FIELD_FIRST_CALL_BOOKED  = "cf_LFdYEQ6bsgp49YjZzefypDmdVx8iwuakWDSLPLpVrBq"
+FIELD_FIRST_CALL_SHOWUP  = "cf_OPyvpU45RdvjLqfm8V1VWwNxrGKogEH2IBJmfCj0Uhq"
+FIELD_SETTER_NAME        = "cf_vz6kNiu4ItFxRA8Y9HKlWIoQMq3TsdaQqKekQ2YuxVk"
 
 EXCLUDED_FUNNELS = {"LTF - Quiz Funnel"}
 
@@ -593,6 +608,175 @@ def build_rep_row(rep, month_start, month_end, biz_days, calendar_per_rep_per_da
 
 
 # ============================================================================
+# SCRAPERS (setters)
+# ============================================================================
+
+def fetch_scraper_activities_mtd(user_id, month_start):
+    """Outbound-only activities by this scraper, MTD.
+
+    Returns:
+      total          - sum of outbound calls + emails + sms
+      counts         - {"outbound_calls": int, "outbound_emails": int, "outbound_sms": int}
+      per_day        - {"outbound_calls": {day: n}, "outbound_emails": {...}, "outbound_sms": {...}}
+
+    Per the spec, voicemails are NOT counted — the underlying call activity
+    already accounts for that contact attempt.
+    """
+    since_iso = month_start.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    base = {"user_id": user_id, "date_created__gte": since_iso}
+
+    def _bucket(path, outbound_values):
+        per_day = defaultdict(int)
+        total = 0
+        for act in close_paginate_skip(path, base):
+            if (act.get("direction") or "").lower() not in outbound_values:
+                continue
+            total += 1
+            ts = act.get("date_created")
+            if ts:
+                try:
+                    dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+                    per_day[dt.astimezone(TIMEZONE).date().isoformat()] += 1
+                except ValueError:
+                    pass
+        return total, dict(per_day)
+
+    calls_total,  calls_pd  = _bucket("/activity/call/",  {"outbound"})
+    emails_total, emails_pd = _bucket("/activity/email/", {"outgoing", "outbound"})
+    sms_total,    sms_pd    = _bucket("/activity/sms/",   {"outbound", "outgoing"})
+
+    return (
+        calls_total + emails_total + sms_total,
+        {"outbound_calls": calls_total,
+         "outbound_emails": emails_total,
+         "outbound_sms": sms_total},
+        {"outbound_calls": calls_pd,
+         "outbound_emails": emails_pd,
+         "outbound_sms": sms_pd},
+    )
+
+
+def fetch_scraper_meetings(setter_value, month_start, month_end):
+    """Meetings BOOKED by this scraper in MTD plus their downstream status.
+
+    A "meeting booked by X" = lead where:
+      - custom.{Setter Name} == setter_value
+      - custom.{First Sales Call Booked Date} is in MTD
+      - funnel is not LTF (kept consistent with the rest of the dashboard)
+
+    For each qualifying lead we then check:
+      - Shown:  custom.{First Call Show Up} = "Yes"
+      - Closed: ANY opportunity on the lead has status_type = won (any date, "ever")
+
+    Returns a dict with totals + per-day buckets:
+      {
+        "booked_total", "shown_total", "closed_total",
+        "booked_per_day", "shown_per_day", "closed_per_day"
+      }
+
+    Per-day buckets are keyed by the lead's First Sales Call Booked Date
+    (i.e. the day the call is scheduled for), matching how Calls Booked is
+    bucketed for closers.
+    """
+    start_d = month_start.date().isoformat()
+    end_d   = (month_end - timedelta(seconds=1)).date().isoformat()
+    q = (
+        f'custom.{FIELD_SETTER_NAME}:"{setter_value}" '
+        f'custom.{FIELD_FIRST_CALL_BOOKED}>="{start_d}" '
+        f'custom.{FIELD_FIRST_CALL_BOOKED}<="{end_d}"'
+    )
+    fields = (
+        "id,opportunities,"
+        f"custom.{FIELD_FIRST_CALL_BOOKED},"
+        f"custom.{FIELD_FIRST_CALL_SHOWUP},"
+        f"custom.{FIELD_FUNNEL_NAME}"
+    )
+
+    booked_total = shown_total = closed_total = 0
+    booked_pd = defaultdict(int)
+    shown_pd  = defaultdict(int)
+    closed_pd = defaultdict(int)
+
+    for ld in close_paginate_skip("/lead/", {"query": q, "_fields": fields}):
+        if get_custom(ld, FIELD_FUNNEL_NAME) in EXCLUDED_FUNNELS:
+            continue
+        booked_date = get_custom(ld, FIELD_FIRST_CALL_BOOKED)
+        if not booked_date:
+            continue
+        day = booked_date[:10]
+
+        booked_total += 1
+        booked_pd[day] += 1
+
+        show_up = (get_custom(ld, FIELD_FIRST_CALL_SHOWUP) or "").strip().lower()
+        if show_up == "yes":
+            shown_total += 1
+            shown_pd[day] += 1
+
+        # "Ever closed-won" — check any opportunity on the lead, any date
+        opps = ld.get("opportunities") or []
+        if any((opp or {}).get("status_type") == "won" for opp in opps):
+            closed_total += 1
+            closed_pd[day] += 1
+
+    return {
+        "booked_total":   booked_total,
+        "shown_total":    shown_total,
+        "closed_total":   closed_total,
+        "booked_per_day": dict(booked_pd),
+        "shown_per_day":  dict(shown_pd),
+        "closed_per_day": dict(closed_pd),
+    }
+
+
+def build_scraper_row(scraper, month_start, month_end):
+    """Returns (mtd_row, per_day_row_dict) for one scraper.
+
+    per_day_row_dict is keyed by YYYY-MM-DD and contains, for each active day:
+      { meetings_booked, meetings_shown, meetings_closed,
+        outbound_calls, outbound_emails, outbound_sms }
+    """
+    print(f"[scraper] {scraper['name']}", flush=True)
+    uid = scraper["user_id"]
+
+    activity_total, activity_counts, activity_per_day = fetch_scraper_activities_mtd(
+        uid, month_start
+    )
+    meetings = fetch_scraper_meetings(
+        scraper["setter_field_value"], month_start, month_end
+    )
+
+    # Assemble per-day rows
+    all_days = (
+        set(meetings["booked_per_day"])
+        | set(activity_per_day["outbound_calls"])
+        | set(activity_per_day["outbound_emails"])
+        | set(activity_per_day["outbound_sms"])
+    )
+    per_day = {}
+    for day in all_days:
+        per_day[day] = {
+            "meetings_booked": meetings["booked_per_day"].get(day, 0),
+            "meetings_shown":  meetings["shown_per_day"].get(day, 0),
+            "meetings_closed": meetings["closed_per_day"].get(day, 0),
+            "outbound_calls":  activity_per_day["outbound_calls"].get(day, 0),
+            "outbound_emails": activity_per_day["outbound_emails"].get(day, 0),
+            "outbound_sms":    activity_per_day["outbound_sms"].get(day, 0),
+        }
+
+    row = {
+        "user_id": uid,
+        "name": scraper["name"],
+        "activities_mtd_total": activity_total,
+        "activities_breakdown": activity_counts,
+        "meetings_booked_mtd": meetings["booked_total"],
+        "meetings_shown_mtd":  meetings["shown_total"],
+        "meetings_closed_ever": meetings["closed_total"],
+    }
+    return row, per_day
+
+
+# ============================================================================
 # MAIN
 # ============================================================================
 
@@ -631,6 +815,34 @@ def main():
             }
     reps.sort(key=lambda x: x["owned_leads"], reverse=True)
 
+    # ─ Scrapers ──────────────────────────────────────────────────────────────
+    print("", flush=True)
+    scrapers = []
+    scraper_daily_breakdowns = {}    # day -> {user_id: {name, meetings_booked, ...}}
+    scraper_calendar = defaultdict(int)             # day -> total meetings booked
+    scraper_calendar_breakdowns = defaultdict(dict) # day -> {scraper_name: count}
+    for scr_cfg in SCRAPERS:
+        scr_row, scr_per_day = build_scraper_row(scr_cfg, month_start, month_end)
+        scrapers.append(scr_row)
+        for day, metrics in scr_per_day.items():
+            if day not in scraper_daily_breakdowns:
+                scraper_daily_breakdowns[day] = {}
+            scraper_daily_breakdowns[day][scr_cfg["user_id"]] = {
+                "name": scr_cfg["name"],
+                **metrics,
+            }
+            booked = metrics.get("meetings_booked", 0)
+            if booked:
+                scraper_calendar[day] += booked
+                scraper_calendar_breakdowns[day][scr_cfg["name"]] = booked
+    scrapers.sort(key=lambda x: x["meetings_booked_mtd"], reverse=True)
+
+    # Backfill scraper calendar grid (every day in month -> 0 if no bookings)
+    full_scraper_calendar = {
+        d.isoformat(): scraper_calendar.get(d.isoformat(), 0)
+        for d in days_in_month(month_start, month_end)
+    }
+
     output = {
         "generated_at": now.isoformat(),
         "month": month_label,
@@ -642,6 +854,10 @@ def main():
         "calendar_breakdowns": calendar_breakdowns,
         "daily_breakdowns": daily_breakdowns,
         "reps": reps,
+        "scrapers": scrapers,
+        "scraper_calendar": full_scraper_calendar,
+        "scraper_calendar_breakdowns": dict(scraper_calendar_breakdowns),
+        "scraper_daily_breakdowns": scraper_daily_breakdowns,
     }
 
     # Write live data + monthly archive
