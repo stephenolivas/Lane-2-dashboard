@@ -233,6 +233,56 @@ def business_days_elapsed(now):
     return max(count, 1)   # avoid divide-by-zero on day-1 weekend edge case
 
 
+def week_bounds_pt(now=None):
+    """Monday–Friday week containing `now` (or just-ended week if on Sat/Sun).
+
+    Returns (week_start_mon_pt, week_end_sat_pt_exclusive, 'YYYY-MM-DD' label = Monday).
+    The exclusive end is Saturday 00:00 PT (so the inclusive last day is Friday).
+    """
+    now = now or now_pt()
+    days_since_monday = now.weekday()   # Mon=0 ... Sun=6
+    week_start = (now - timedelta(days=days_since_monday)).replace(
+        hour=0, minute=0, second=0, microsecond=0
+    )
+    week_end_exclusive = week_start + timedelta(days=5)   # Sat 00:00 PT
+    return week_start, week_end_exclusive, week_start.strftime("%Y-%m-%d")
+
+
+def business_days_elapsed_wtd(now, week_start, week_end_exclusive):
+    """Count Mon-Fri days from week_start through min(today, Friday) inclusive."""
+    last_day = (week_end_exclusive - timedelta(days=1)).date()   # Friday of the week
+    end_d = min(now.date(), last_day)
+    d = week_start.date()
+    count = 0
+    while d <= end_d:
+        if d.weekday() < 5:
+            count += 1
+        d += timedelta(days=1)
+    return max(count, 1)
+
+
+def prev_n_weeks(week_start, n):
+    """Return list of {start, end_exclusive, label} for the N completed weeks before `week_start`."""
+    out = []
+    for i in range(1, n + 1):
+        ws = week_start - timedelta(weeks=i)
+        we = ws + timedelta(days=5)
+        out.append({"start": ws, "end_exclusive": we, "label": ws.strftime("%Y-%m-%d")})
+    return out
+
+
+def format_week_label(week_start, week_end_inclusive):
+    """e.g. 'Jun 8 – 12, 2026' (or cross-month: 'May 27 – Jun 2, 2026')."""
+    same_month = (week_start.month == week_end_inclusive.month
+                   and week_start.year == week_end_inclusive.year)
+    if same_month:
+        return (f"{week_start.strftime('%b')} {week_start.day} – "
+                f"{week_end_inclusive.day}, {week_end_inclusive.year}")
+    return (f"{week_start.strftime('%b')} {week_start.day} – "
+            f"{week_end_inclusive.strftime('%b')} {week_end_inclusive.day}, "
+            f"{week_end_inclusive.year}")
+
+
 # ============================================================================
 # CALENDAR — leads assigned to Lane 2 reps per day
 # ============================================================================
@@ -368,81 +418,71 @@ def fetch_owned_leads(user_id):
     return leads
 
 
-def fetch_activity_mtd(user_id, month_start):
-    """Returns (total_activities, outbound_calls_total, outbound_emails_total,
-                outbound_calls_per_day, outbound_emails_per_day).
+def fetch_rep_activities_per_day(user_id, fetch_start):
+    """Per-day buckets for each activity type, plus outbound subsets for calls/emails.
 
-    Paginates /activity/call/ and /activity/email/ to capture per-day dates AND
-    direction (we need outbound subsets and per-day buckets for the click popup).
-    Uses cheaper close_count for sms/notes/meetings since we only need their totals
-    for the "# Activities" summary.
+    Paginates ALL 5 activity types from `fetch_start` onward — so the same data
+    serves both MTD and WTD aggregations. SMS/notes/meetings used to use the
+    cheaper close_count, but it paginates internally anyway when total_results
+    is missing, so this is the same cost while giving us per-day granularity
+    for the # Activities total in any time window.
+
+    Returns:
+      {
+        "calls": {day: n},  "calls_outbound": {day: n},
+        "emails": {day: n}, "emails_outbound": {day: n},
+        "sms": {day: n}, "notes": {day: n}, "meetings": {day: n},
+      }
     """
-    since_iso = month_start.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    since_iso = fetch_start.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     base = {"user_id": user_id, "date_created__gte": since_iso}
 
-    # Paginated: calls + emails (need date + direction for buckets)
-    total_calls = 0
-    outbound_calls_total = 0
-    outbound_calls_per_day = defaultdict(int)
-    for act in close_paginate_skip("/activity/call/", base):
-        total_calls += 1
-        if (act.get("direction") or "").lower() == "outbound":
-            outbound_calls_total += 1
+    def _bucket(path, outbound_values=None):
+        all_pd = defaultdict(int)
+        ob_pd = defaultdict(int)
+        for act in close_paginate_skip(path, base):
             ts = act.get("date_created")
-            if ts:
-                try:
-                    dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
-                    outbound_calls_per_day[dt.astimezone(TIMEZONE).date().isoformat()] += 1
-                except ValueError:
-                    pass
+            if not ts:
+                continue
+            try:
+                dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+                day = dt.astimezone(TIMEZONE).date().isoformat()
+            except ValueError:
+                continue
+            all_pd[day] += 1
+            if outbound_values and (act.get("direction") or "").lower() in outbound_values:
+                ob_pd[day] += 1
+        return dict(all_pd), dict(ob_pd)
 
-    total_emails = 0
-    outbound_emails_total = 0
-    outbound_emails_per_day = defaultdict(int)
-    for act in close_paginate_skip("/activity/email/", base):
-        total_emails += 1
-        # Close uses "outgoing" for emails; accept "outbound" too defensively
-        if (act.get("direction") or "").lower() in ("outgoing", "outbound"):
-            outbound_emails_total += 1
-            ts = act.get("date_created")
-            if ts:
-                try:
-                    dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
-                    outbound_emails_per_day[dt.astimezone(TIMEZONE).date().isoformat()] += 1
-                except ValueError:
-                    pass
+    calls_pd,    calls_ob_pd   = _bucket("/activity/call/",    {"outbound"})
+    emails_pd,   emails_ob_pd  = _bucket("/activity/email/",   {"outgoing", "outbound"})
+    sms_pd,      _             = _bucket("/activity/sms/")
+    notes_pd,    _             = _bucket("/activity/note/")
+    meetings_pd, _             = _bucket("/activity/meeting/")
 
-    # Cheaper: just totals for SMS / notes / meetings
-    sms      = close_count("/activity/sms/",     base)
-    notes    = close_count("/activity/note/",    base)
-    meetings = close_count("/activity/meeting/", base)
-
-    total = total_calls + total_emails + sms + notes + meetings
-    return (
-        total,
-        outbound_calls_total,
-        outbound_emails_total,
-        dict(outbound_calls_per_day),
-        dict(outbound_emails_per_day),
-    )
+    return {
+        "calls":          calls_pd,
+        "calls_outbound": calls_ob_pd,
+        "emails":         emails_pd,
+        "emails_outbound": emails_ob_pd,
+        "sms":            sms_pd,
+        "notes":          notes_pd,
+        "meetings":       meetings_pd,
+    }
 
 
-def fetch_calls_booked_mtd(user_id, month_start, month_end):
-    """Returns (total_count, per_day_dict).
-
-    A "call booked" = a lead owned by this rep whose `First Sales Call Booked Date`
-    falls in MTD. The custom field stores the scheduled call date, which we use
-    directly to bucket the calendar day. Excludes LTF Quiz Funnel.
+def fetch_calls_booked_per_day(user_id, fetch_start, fetch_end_exclusive):
+    """Per-day buckets of `First Sales Call Booked Date` for leads owned by `user_id`,
+    over [fetch_start, fetch_end_exclusive]. LTF excluded. Returns {day: count}.
     """
-    start_d = month_start.date().isoformat()
-    end_d   = (month_end - timedelta(seconds=1)).date().isoformat()
+    start_d = fetch_start.date().isoformat()
+    end_d   = (fetch_end_exclusive - timedelta(seconds=1)).date().isoformat()
     q = (
         f'custom.{FIELD_LEAD_OWNER}:"{user_id}" '
         f'custom.{FIELD_FIRST_CALL_BOOKED}>="{start_d}" '
         f'custom.{FIELD_FIRST_CALL_BOOKED}<="{end_d}"'
     )
     per_day = defaultdict(int)
-    total = 0
     for ld in close_paginate_skip("/lead/", {
         "query": q,
         "_fields": (
@@ -455,27 +495,22 @@ def fetch_calls_booked_mtd(user_id, month_start, month_end):
         booked_date = get_custom(ld, FIELD_FIRST_CALL_BOOKED)
         if not booked_date:
             continue
-        # The field is stored as YYYY-MM-DD; take the first 10 chars defensively.
-        day = booked_date[:10]
-        per_day[day] += 1
-        total += 1
-    return total, dict(per_day)
+        per_day[booked_date[:10]] += 1
+    return dict(per_day)
 
 
-def fetch_deals_mtd(user_id, month_start, month_end):
-    """Returns (won_total, lost_total, won_per_day) for this rep, excluding LTF.
+def fetch_deals_per_day(user_id, fetch_start, fetch_end_exclusive):
+    """Per-day buckets for won and lost deals for this rep, in PT.
 
-    Won: server-side date_won filter works.
-    Lost: server-side date_lost filter is silently ignored by Close, so we
-          paginate ALL of the rep's lost opps and filter on date_lost in Python.
-
-    LTF exclusion: per-lead funnel lookup (cached).
+    Won:  server-side date_won filter (works).
+    Lost: paginate all, filter client-side on date_lost (server-side filter is silently ignored).
+    LTF excluded via per-lead funnel lookup (cached).
+    Returns (won_per_day, lost_per_day) as plain dicts.
     """
-    start_iso = month_start.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-    end_iso   = month_end.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    start_iso = fetch_start.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    end_iso   = fetch_end_exclusive.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
-    # Won — list of (lead_id, date_won_str)
-    won_records = []
+    won_records = []   # (lead_id, date_won_str)
     for opp in close_paginate_skip("/opportunity/", {
         "user_id": user_id,
         "status_type": "won",
@@ -486,10 +521,9 @@ def fetch_deals_mtd(user_id, month_start, month_end):
         if opp.get("lead_id") and opp.get("date_won"):
             won_records.append((opp["lead_id"], opp["date_won"]))
 
-    # Lost — paginate all, filter client-side on date_lost
-    lost_records = []  # list of lead_ids
-    m_start_utc = month_start.astimezone(timezone.utc)
-    m_end_utc   = month_end.astimezone(timezone.utc)
+    lost_records = []  # (lead_id, date_lost_str)
+    f_start_utc = fetch_start.astimezone(timezone.utc)
+    f_end_utc   = fetch_end_exclusive.astimezone(timezone.utc)
     for opp in close_paginate_skip("/opportunity/", {
         "user_id": user_id,
         "status_type": "lost",
@@ -502,13 +536,13 @@ def fetch_deals_mtd(user_id, month_start, month_end):
             dt = datetime.fromisoformat(date_lost.replace("Z", "+00:00"))
         except ValueError:
             continue
-        if not (m_start_utc <= dt.astimezone(timezone.utc) < m_end_utc):
+        if not (f_start_utc <= dt.astimezone(timezone.utc) < f_end_utc):
             continue
         if opp.get("lead_id"):
-            lost_records.append(opp["lead_id"])
+            lost_records.append((opp["lead_id"], date_lost))
 
-    # LTF exclusion: look up each unique lead's funnel once
-    unique_leads = set(r[0] for r in won_records) | set(lost_records)
+    # LTF exclusion — look up each unique lead's funnel once
+    unique_leads = set(r[0] for r in won_records) | set(r[0] for r in lost_records)
     funnel_cache = {}
     for lid in unique_leads:
         try:
@@ -518,31 +552,31 @@ def fetch_deals_mtd(user_id, month_start, month_end):
         except requests.HTTPError:
             funnel_cache[lid] = None
 
-    # Won: total + per-day (bucketed by PT)
-    won_total = 0
-    won_per_day = defaultdict(int)
-    for lid, date_won_str in won_records:
-        if funnel_cache.get(lid) in EXCLUDED_FUNNELS:
-            continue
-        won_total += 1
-        try:
-            dt = datetime.fromisoformat(date_won_str.replace("Z", "+00:00"))
-            won_per_day[dt.astimezone(TIMEZONE).date().isoformat()] += 1
-        except ValueError:
-            pass
+    def _bucket(records):
+        per_day = defaultdict(int)
+        for lid, date_str in records:
+            if funnel_cache.get(lid) in EXCLUDED_FUNNELS:
+                continue
+            try:
+                dt = datetime.fromisoformat(date_str.replace("Z", "+00:00"))
+            except ValueError:
+                continue
+            per_day[dt.astimezone(TIMEZONE).date().isoformat()] += 1
+        return dict(per_day)
 
-    lost_total = sum(1 for lid in lost_records
-                     if funnel_cache.get(lid) not in EXCLUDED_FUNNELS)
-
-    return won_total, lost_total, dict(won_per_day)
+    return _bucket(won_records), _bucket(lost_records)
 
 
-def build_rep_row(rep, month_start, month_end, biz_days, calendar_per_rep_per_day):
-    """Returns (rep_mtd_row, per_day_row_dict).
+def build_rep_data(rep, fetch_start, fetch_end_exclusive):
+    """Fetch ALL of this rep's data covering [fetch_start, fetch_end_exclusive].
 
-    per_day_row_dict is keyed by YYYY-MM-DD and contains the per-day metrics
-    used by the calendar click popup: new_leads, outbound_calls, outbound_emails,
-    calls_booked, deals_closed.
+    Returns (snapshot, per_day):
+      snapshot — current-state values (owned_leads, handraiser_breakdown, leads_zero_comms);
+                 same regardless of which period is being viewed.
+      per_day  — flat dict of per-day buckets keyed by metric name:
+                 calls, calls_outbound, emails, emails_outbound, sms, notes, meetings,
+                 calls_booked, deals_won, deals_lost.
+                 Aggregations for MTD / WTD / backfill weeks slice this same dict.
     """
     print(f"[rep] {rep['name']}", flush=True)
     uid = rep["user_id"]
@@ -554,132 +588,119 @@ def build_rep_row(rep, month_start, month_end, biz_days, calendar_per_rep_per_da
         handraiser_counts[ld["handraiser"] or "(unset)"] += 1
         if ld["times_communicated"] == 0:
             zero_comm += 1
-
-    (total_acts,
-     ob_calls_total, ob_emails_total,
-     ob_calls_per_day, ob_emails_per_day) = fetch_activity_mtd(uid, month_start)
-
-    calls_booked_total, calls_booked_per_day = fetch_calls_booked_mtd(uid, month_start, month_end)
-    won_total, lost_total, won_per_day      = fetch_deals_mtd(uid, month_start, month_end)
-
-    # Averages per business day so far this month
-    ob_calls_avg  = round(ob_calls_total  / biz_days, 1)
-    ob_emails_avg = round(ob_emails_total / biz_days, 1)
-
-    # Assemble per-day rows for the click popup.
-    all_days = (
-        set(ob_calls_per_day) | set(ob_emails_per_day)
-        | set(calls_booked_per_day) | set(won_per_day)
-    )
-    for day, by_rep in calendar_per_rep_per_day.items():
-        if by_rep.get(uid):
-            all_days.add(day)
-
-    per_day = {}
-    for day in all_days:
-        per_day[day] = {
-            "new_leads":       calendar_per_rep_per_day.get(day, {}).get(uid, 0),
-            "outbound_calls":  ob_calls_per_day.get(day, 0),
-            "outbound_emails": ob_emails_per_day.get(day, 0),
-            "calls_booked":    calls_booked_per_day.get(day, 0),
-            "deals_closed":    won_per_day.get(day, 0),
-        }
-
-    row = {
-        "user_id": uid,
-        "name": rep["name"],
+    snapshot = {
         "owned_leads": len(leads),
         "handraiser_breakdown": dict(sorted(
             handraiser_counts.items(), key=lambda kv: kv[1], reverse=True
         )),
-        "activities_mtd": total_acts,
         "leads_zero_comms": zero_comm,
-        # Keep totals in the JSON (useful for the side panel) but the dashboard
-        # rep-details table displays the averages by default per user request.
-        "outbound_calls_mtd": ob_calls_total,
-        "outbound_emails_mtd": ob_emails_total,
-        "outbound_calls_per_day_avg":  ob_calls_avg,
-        "outbound_emails_per_day_avg": ob_emails_avg,
-        "calls_booked_mtd": calls_booked_total,
-        "deals_closed_mtd": won_total,
-        "deals_lost_mtd": lost_total,
     }
-    return row, per_day
+
+    act_pd = fetch_rep_activities_per_day(uid, fetch_start)
+    calls_booked_pd = fetch_calls_booked_per_day(uid, fetch_start, fetch_end_exclusive)
+    won_pd, lost_pd = fetch_deals_per_day(uid, fetch_start, fetch_end_exclusive)
+
+    per_day = {
+        **act_pd,                       # calls, calls_outbound, emails, emails_outbound, sms, notes, meetings
+        "calls_booked": calls_booked_pd,
+        "deals_won":    won_pd,
+        "deals_lost":   lost_pd,
+    }
+    return snapshot, per_day
+
+
+def _sum_in_range(per_day_dict, start_date, end_date_exclusive):
+    """Sum values in a per-day dict whose keys fall in [start_date, end_date_exclusive)."""
+    total = 0
+    for day_str, count in (per_day_dict or {}).items():
+        try:
+            d = datetime.strptime(day_str, "%Y-%m-%d").date()
+        except ValueError:
+            continue
+        if start_date <= d < end_date_exclusive:
+            total += count
+    return total
+
+
+def aggregate_rep_for_period(per_day, start_pt, end_exclusive_pt, biz_days):
+    """Aggregate a rep's per-day data into period totals."""
+    s, e = start_pt.date(), end_exclusive_pt.date()
+    calls    = _sum_in_range(per_day.get("calls"),    s, e)
+    emails   = _sum_in_range(per_day.get("emails"),   s, e)
+    sms      = _sum_in_range(per_day.get("sms"),      s, e)
+    notes    = _sum_in_range(per_day.get("notes"),    s, e)
+    meetings = _sum_in_range(per_day.get("meetings"), s, e)
+    ob_calls  = _sum_in_range(per_day.get("calls_outbound"),  s, e)
+    ob_emails = _sum_in_range(per_day.get("emails_outbound"), s, e)
+    return {
+        "activities":      calls + emails + sms + notes + meetings,
+        "outbound_calls":  ob_calls,
+        "outbound_emails": ob_emails,
+        "outbound_calls_per_day_avg":  round(ob_calls  / max(biz_days, 1), 1),
+        "outbound_emails_per_day_avg": round(ob_emails / max(biz_days, 1), 1),
+        "calls_booked":  _sum_in_range(per_day.get("calls_booked"), s, e),
+        "deals_closed":  _sum_in_range(per_day.get("deals_won"),    s, e),
+        "deals_lost":    _sum_in_range(per_day.get("deals_lost"),   s, e),
+    }
 
 
 # ============================================================================
 # SCRAPERS (setters)
 # ============================================================================
 
-def fetch_scraper_activities_mtd(user_id, month_start):
-    """Outbound-only activities by this scraper, MTD.
+def fetch_scraper_activities_per_day(user_id, fetch_start):
+    """Outbound-only activities for this scraper from fetch_start onward.
+
+    Per spec, voicemails are NOT counted — the underlying call activity already
+    accounts for the contact attempt.
 
     Returns:
-      total          - sum of outbound calls + emails + sms
-      counts         - {"outbound_calls": int, "outbound_emails": int, "outbound_sms": int}
-      per_day        - {"outbound_calls": {day: n}, "outbound_emails": {...}, "outbound_sms": {...}}
-
-    Per the spec, voicemails are NOT counted — the underlying call activity
-    already accounts for that contact attempt.
+      {
+        "outbound_calls":  {day: n},
+        "outbound_emails": {day: n},
+        "outbound_sms":    {day: n},
+      }
     """
-    since_iso = month_start.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    since_iso = fetch_start.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     base = {"user_id": user_id, "date_created__gte": since_iso}
 
     def _bucket(path, outbound_values):
         per_day = defaultdict(int)
-        total = 0
         for act in close_paginate_skip(path, base):
             if (act.get("direction") or "").lower() not in outbound_values:
                 continue
-            total += 1
             ts = act.get("date_created")
-            if ts:
-                try:
-                    dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
-                    per_day[dt.astimezone(TIMEZONE).date().isoformat()] += 1
-                except ValueError:
-                    pass
-        return total, dict(per_day)
+            if not ts:
+                continue
+            try:
+                dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+                per_day[dt.astimezone(TIMEZONE).date().isoformat()] += 1
+            except ValueError:
+                pass
+        return dict(per_day)
 
-    calls_total,  calls_pd  = _bucket("/activity/call/",  {"outbound"})
-    emails_total, emails_pd = _bucket("/activity/email/", {"outgoing", "outbound"})
-    sms_total,    sms_pd    = _bucket("/activity/sms/",   {"outbound", "outgoing"})
-
-    return (
-        calls_total + emails_total + sms_total,
-        {"outbound_calls": calls_total,
-         "outbound_emails": emails_total,
-         "outbound_sms": sms_total},
-        {"outbound_calls": calls_pd,
-         "outbound_emails": emails_pd,
-         "outbound_sms": sms_pd},
-    )
+    return {
+        "outbound_calls":  _bucket("/activity/call/",  {"outbound"}),
+        "outbound_emails": _bucket("/activity/email/", {"outgoing", "outbound"}),
+        "outbound_sms":    _bucket("/activity/sms/",   {"outbound", "outgoing"}),
+    }
 
 
-def fetch_scraper_meetings(setter_value, month_start, month_end):
-    """Meetings BOOKED by this scraper in MTD plus their downstream status.
+def fetch_scraper_meetings_per_day(setter_value, fetch_start, fetch_end_exclusive):
+    """Per-day buckets for booked / shown / closed meetings credited to a scraper,
+    across [fetch_start, fetch_end_exclusive].
 
     A "meeting booked by X" = lead where:
       - custom.{Setter Name} == setter_value
-      - custom.{First Sales Call Booked Date} is in MTD
-      - funnel is not LTF (kept consistent with the rest of the dashboard)
+      - custom.{First Sales Call Booked Date} in [fetch_start, fetch_end]
+      - funnel is not LTF
 
-    For each qualifying lead we then check:
-      - Shown:  custom.{First Call Show Up} = "Yes"
-      - Closed: ANY opportunity on the lead has status_type = won (any date, "ever")
-
-    Returns a dict with totals + per-day buckets:
-      {
-        "booked_total", "shown_total", "closed_total",
-        "booked_per_day", "shown_per_day", "closed_per_day"
-      }
-
-    Per-day buckets are keyed by the lead's First Sales Call Booked Date
-    (i.e. the day the call is scheduled for), matching how Calls Booked is
-    bucketed for closers.
+    For each qualifying lead, day is its First Sales Call Booked Date.
+    Shown:  custom.{First Call Show Up} = "Yes"
+    Closed: ANY opportunity on the lead has status_type = won (any date, "ever")
     """
-    start_d = month_start.date().isoformat()
-    end_d   = (month_end - timedelta(seconds=1)).date().isoformat()
+    start_d = fetch_start.date().isoformat()
+    end_d   = (fetch_end_exclusive - timedelta(seconds=1)).date().isoformat()
     q = (
         f'custom.{FIELD_SETTER_NAME}:"{setter_value}" '
         f'custom.{FIELD_FIRST_CALL_BOOKED}>="{start_d}" '
@@ -692,7 +713,6 @@ def fetch_scraper_meetings(setter_value, month_start, month_end):
         f"custom.{FIELD_FUNNEL_NAME}"
     )
 
-    booked_total = shown_total = closed_total = 0
     booked_pd = defaultdict(int)
     shown_pd  = defaultdict(int)
     closed_pd = defaultdict(int)
@@ -704,172 +724,490 @@ def fetch_scraper_meetings(setter_value, month_start, month_end):
         if not booked_date:
             continue
         day = booked_date[:10]
-
-        booked_total += 1
         booked_pd[day] += 1
 
         show_up = (get_custom(ld, FIELD_FIRST_CALL_SHOWUP) or "").strip().lower()
         if show_up == "yes":
-            shown_total += 1
             shown_pd[day] += 1
 
-        # "Ever closed-won" — check any opportunity on the lead, any date
         opps = ld.get("opportunities") or []
         if any((opp or {}).get("status_type") == "won" for opp in opps):
-            closed_total += 1
             closed_pd[day] += 1
 
     return {
-        "booked_total":   booked_total,
-        "shown_total":    shown_total,
-        "closed_total":   closed_total,
-        "booked_per_day": dict(booked_pd),
-        "shown_per_day":  dict(shown_pd),
-        "closed_per_day": dict(closed_pd),
+        "meetings_booked": dict(booked_pd),
+        "meetings_shown":  dict(shown_pd),
+        "meetings_closed": dict(closed_pd),
     }
 
 
-def build_scraper_row(scraper, month_start, month_end):
-    """Returns (mtd_row, per_day_row_dict) for one scraper.
-
-    per_day_row_dict is keyed by YYYY-MM-DD and contains, for each active day:
-      { meetings_booked, meetings_shown, meetings_closed,
-        outbound_calls, outbound_emails, outbound_sms }
+def build_scraper_data(scraper, fetch_start, fetch_end_exclusive):
+    """Fetch ALL scraper data covering [fetch_start, fetch_end_exclusive]. Returns per_day dict.
     """
     print(f"[scraper] {scraper['name']}", flush=True)
     uid = scraper["user_id"]
-
-    activity_total, activity_counts, activity_per_day = fetch_scraper_activities_mtd(
-        uid, month_start
+    act_pd = fetch_scraper_activities_per_day(uid, fetch_start)
+    mtg_pd = fetch_scraper_meetings_per_day(
+        scraper["setter_field_value"], fetch_start, fetch_end_exclusive
     )
-    meetings = fetch_scraper_meetings(
-        scraper["setter_field_value"], month_start, month_end
-    )
+    return {**act_pd, **mtg_pd}
 
-    # Assemble per-day rows
-    all_days = (
-        set(meetings["booked_per_day"])
-        | set(activity_per_day["outbound_calls"])
-        | set(activity_per_day["outbound_emails"])
-        | set(activity_per_day["outbound_sms"])
-    )
-    per_day = {}
-    for day in all_days:
-        per_day[day] = {
-            "meetings_booked": meetings["booked_per_day"].get(day, 0),
-            "meetings_shown":  meetings["shown_per_day"].get(day, 0),
-            "meetings_closed": meetings["closed_per_day"].get(day, 0),
-            "outbound_calls":  activity_per_day["outbound_calls"].get(day, 0),
-            "outbound_emails": activity_per_day["outbound_emails"].get(day, 0),
-            "outbound_sms":    activity_per_day["outbound_sms"].get(day, 0),
-        }
 
-    row = {
-        "user_id": uid,
-        "name": scraper["name"],
-        "activities_mtd_total": activity_total,
-        "activities_breakdown": activity_counts,
-        "meetings_booked_mtd": meetings["booked_total"],
-        "meetings_shown_mtd":  meetings["shown_total"],
-        "meetings_closed_ever": meetings["closed_total"],
+def aggregate_scraper_for_period(per_day, start_pt, end_exclusive_pt):
+    """Aggregate a scraper's per-day data into period totals."""
+    s, e = start_pt.date(), end_exclusive_pt.date()
+    oc = _sum_in_range(per_day.get("outbound_calls"),  s, e)
+    oe = _sum_in_range(per_day.get("outbound_emails"), s, e)
+    os = _sum_in_range(per_day.get("outbound_sms"),    s, e)
+    return {
+        "activities_total": oc + oe + os,
+        "activities_breakdown": {
+            "outbound_calls":  oc,
+            "outbound_emails": oe,
+            "outbound_sms":    os,
+        },
+        "meetings_booked": _sum_in_range(per_day.get("meetings_booked"), s, e),
+        "meetings_shown":  _sum_in_range(per_day.get("meetings_shown"),  s, e),
+        "meetings_closed": _sum_in_range(per_day.get("meetings_closed"), s, e),
     }
-    return row, per_day
 
 
 # ============================================================================
 # MAIN
 # ============================================================================
 
+def _slice_dict_by_date(d, start_date, end_exclusive_date):
+    """Return a copy of `d` keyed by YYYY-MM-DD whose keys fall in [start, end_exclusive)."""
+    out = {}
+    for k, v in (d or {}).items():
+        try:
+            dd = datetime.strptime(k, "%Y-%m-%d").date()
+        except ValueError:
+            continue
+        if start_date <= dd < end_exclusive_date:
+            out[k] = v
+    return out
+
+
+def _build_daily_breakdowns(rep_meta, rep_per_day_by_uid, calendar_per_rep_per_day,
+                             start_pt, end_exclusive_pt):
+    """Build the {day: {user_id: {name, new_leads, outbound_calls, outbound_emails,
+                                   calls_booked, deals_closed}}} structure that powers
+       the rep-view click drill-down, for the given date range."""
+    s, e = start_pt.date(), end_exclusive_pt.date()
+    out = {}
+    for meta in rep_meta:
+        uid = meta["user_id"]
+        pd = rep_per_day_by_uid.get(uid, {})
+        # Days where this rep had any activity in the period
+        candidate_days = (
+            set(pd.get("calls_outbound", {})) |
+            set(pd.get("emails_outbound", {})) |
+            set(pd.get("calls_booked", {})) |
+            set(pd.get("deals_won", {}))
+        )
+        for day, by_rep in calendar_per_rep_per_day.items():
+            if by_rep.get(uid):
+                candidate_days.add(day)
+        for day in candidate_days:
+            try:
+                dd = datetime.strptime(day, "%Y-%m-%d").date()
+            except ValueError:
+                continue
+            if not (s <= dd < e):
+                continue
+            row = {
+                "new_leads":       calendar_per_rep_per_day.get(day, {}).get(uid, 0),
+                "outbound_calls":  pd.get("calls_outbound",  {}).get(day, 0),
+                "outbound_emails": pd.get("emails_outbound", {}).get(day, 0),
+                "calls_booked":    pd.get("calls_booked",    {}).get(day, 0),
+                "deals_closed":    pd.get("deals_won",       {}).get(day, 0),
+            }
+            if any(row.values()):
+                out.setdefault(day, {})[uid] = {"name": meta["name"], **row}
+    return out
+
+
+def _build_scraper_daily_breakdowns(scraper_meta, scraper_per_day_by_uid,
+                                     start_pt, end_exclusive_pt):
+    s, e = start_pt.date(), end_exclusive_pt.date()
+    out = {}
+    for meta in scraper_meta:
+        uid = meta["user_id"]
+        pd = scraper_per_day_by_uid.get(uid, {})
+        days = (
+            set(pd.get("meetings_booked", {})) |
+            set(pd.get("meetings_shown",  {})) |
+            set(pd.get("meetings_closed", {})) |
+            set(pd.get("outbound_calls",  {})) |
+            set(pd.get("outbound_emails", {})) |
+            set(pd.get("outbound_sms",    {}))
+        )
+        for day in days:
+            try:
+                dd = datetime.strptime(day, "%Y-%m-%d").date()
+            except ValueError:
+                continue
+            if not (s <= dd < e):
+                continue
+            row = {
+                "meetings_booked": pd.get("meetings_booked", {}).get(day, 0),
+                "meetings_shown":  pd.get("meetings_shown",  {}).get(day, 0),
+                "meetings_closed": pd.get("meetings_closed", {}).get(day, 0),
+                "outbound_calls":  pd.get("outbound_calls",  {}).get(day, 0),
+                "outbound_emails": pd.get("outbound_emails", {}).get(day, 0),
+                "outbound_sms":    pd.get("outbound_sms",    {}).get(day, 0),
+            }
+            if any(row.values()):
+                out.setdefault(day, {})[uid] = {"name": meta["name"], **row}
+    return out
+
+
+def _build_scraper_calendar(scraper_meta, scraper_per_day_by_uid,
+                             start_pt, end_exclusive_pt, fill_days):
+    """Returns (calendar_counts {day: total_meetings_booked},
+                breakdowns {day: {scraper_name: count}}),
+       backfilled so every day in `fill_days` is present (zero if no bookings)."""
+    s, e = start_pt.date(), end_exclusive_pt.date()
+    counts = {d: 0 for d in fill_days}
+    breakdowns = defaultdict(dict)
+    for meta in scraper_meta:
+        uid = meta["user_id"]
+        booked_pd = scraper_per_day_by_uid.get(uid, {}).get("meetings_booked", {})
+        for day, n in booked_pd.items():
+            if not n:
+                continue
+            try:
+                dd = datetime.strptime(day, "%Y-%m-%d").date()
+            except ValueError:
+                continue
+            if not (s <= dd < e):
+                continue
+            counts[day] = counts.get(day, 0) + n
+            breakdowns[day][meta["name"]] = n
+    return counts, dict(breakdowns)
+
+
+def _build_rep_view(rep_meta, rep_per_day_by_uid, start_pt, end_exclusive_pt, biz_days,
+                     legacy_suffix="_mtd"):
+    """Build the `reps` array for an output file. legacy_suffix is "_mtd" for both
+    the live data.json and archives — the HTML already reads those names, and using
+    them for weekly archives too means the rep-details renderer works unchanged.
+    """
+    out = []
+    for meta in rep_meta:
+        uid = meta["user_id"]
+        pd = rep_per_day_by_uid.get(uid, {})
+        agg = aggregate_rep_for_period(pd, start_pt, end_exclusive_pt, biz_days)
+        out.append({
+            **meta,
+            f"activities{legacy_suffix}":      agg["activities"],
+            f"outbound_calls{legacy_suffix}":  agg["outbound_calls"],
+            f"outbound_emails{legacy_suffix}": agg["outbound_emails"],
+            "outbound_calls_per_day_avg":      agg["outbound_calls_per_day_avg"],
+            "outbound_emails_per_day_avg":     agg["outbound_emails_per_day_avg"],
+            f"calls_booked{legacy_suffix}":    agg["calls_booked"],
+            f"deals_closed{legacy_suffix}":    agg["deals_closed"],
+            f"deals_lost{legacy_suffix}":      agg["deals_lost"],
+        })
+    out.sort(key=lambda x: x["owned_leads"], reverse=True)
+    return out
+
+
+def _build_scraper_view(scraper_meta, scraper_per_day_by_uid, start_pt, end_exclusive_pt):
+    out = []
+    for meta in scraper_meta:
+        uid = meta["user_id"]
+        pd = scraper_per_day_by_uid.get(uid, {})
+        agg = aggregate_scraper_for_period(pd, start_pt, end_exclusive_pt)
+        out.append({
+            **meta,
+            "activities_mtd_total":  agg["activities_total"],
+            "activities_breakdown":  agg["activities_breakdown"],
+            "meetings_booked_mtd":   agg["meetings_booked"],
+            "meetings_shown_mtd":    agg["meetings_shown"],
+            "meetings_closed_ever":  agg["meetings_closed"],
+        })
+    out.sort(key=lambda x: x["meetings_booked_mtd"], reverse=True)
+    return out
+
+
+def _mon_to_fri(week_start):
+    """Returns the 5 Mon-Fri ISO date strings for a week starting `week_start`."""
+    return [(week_start + timedelta(days=i)).date().isoformat() for i in range(5)]
+
+
+def _update_archives_index(archives_dir):
+    """Rewrite archives/index.json listing all months + weeks present."""
+    months = sorted(
+        [f.stem.removeprefix("data_") for f in archives_dir.glob("data_*.json")],
+        reverse=True,
+    )
+    weeks = sorted(
+        [f.stem.removeprefix("week_") for f in archives_dir.glob("week_*.json")],
+        reverse=True,
+    )
+    # Attach human-readable labels for the picker
+    def _week_label(ws_iso):
+        try:
+            ws = datetime.strptime(ws_iso, "%Y-%m-%d")
+            we = ws + timedelta(days=4)
+            return format_week_label(ws, we)
+        except ValueError:
+            return ws_iso
+
+    def _month_label(m_iso):
+        try:
+            return datetime.strptime(m_iso, "%Y-%m").strftime("%B %Y")
+        except ValueError:
+            return m_iso
+
+    index = {
+        "months": [{"key": m, "label": _month_label(m)} for m in months],
+        "weeks":  [{"key": w, "label": _week_label(w)}  for w in weeks],
+    }
+    (archives_dir / "index.json").write_text(json.dumps(index, indent=2))
+    print(f"wrote {archives_dir / 'index.json'} "
+          f"(months={len(months)}, weeks={len(weeks)})", flush=True)
+
+
 def main():
     started = time.time()
     now = now_pt()
+
     month_start, month_end, month_label = month_bounds(now)
-    biz_days = business_days_elapsed(now)
+    week_start, week_end_excl, week_iso = week_bounds_pt(now)
+    biz_days_mtd = business_days_elapsed(now)
+    biz_days_wtd = business_days_elapsed_wtd(now, week_start, week_end_excl)
+
+    # Backfill the previous 2 completed weeks (per spec). Extend fetch range
+    # back to the earliest needed Monday so all per-day data is captured in
+    # one pass.
+    backfill_weeks = prev_n_weeks(week_start, 2)
+    earliest_week = min([week_start] + [bw["start"] for bw in backfill_weeks])
+    fetch_start = min(month_start, earliest_week)
+
     print(f"Run: {now.isoformat()}", flush=True)
     print(f"Month: {month_label} ({month_start.date()} → "
-          f"{(month_end - timedelta(days=1)).date()})  ·  "
-          f"business days elapsed: {biz_days}\n", flush=True)
+          f"{(month_end - timedelta(days=1)).date()}) biz_days={biz_days_mtd}", flush=True)
+    print(f"Week:  {week_iso} ({week_start.date()} → "
+          f"{(week_end_excl - timedelta(days=1)).date()}) biz_days={biz_days_wtd}", flush=True)
+    print(f"Backfill weeks: {[bw['label'] for bw in backfill_weeks]}", flush=True)
+    print(f"Fetch from: {fetch_start.date()} (covers all of the above)\n", flush=True)
 
-    calendar_counts, calendar_breakdowns, calendar_per_rep_per_day = fetch_calendar(month_start, month_end)
+    # ─ Calendar (lead.updated events) ─────────────────────────────────────
+    cal_counts_all, cal_breakdowns_all, cal_per_rep_per_day_all = fetch_calendar(
+        fetch_start, month_end
+    )
 
-    # Backfill every day in the month with 0 so the calendar grid is complete
-    full_calendar = {
-        d.isoformat(): calendar_counts.get(d.isoformat(), 0)
-        for d in days_in_month(month_start, month_end)
-    }
-
+    # ─ Per-rep data ───────────────────────────────────────────────────────
     print("", flush=True)
-    reps = []
-    daily_breakdowns = {}   # day -> {user_id: {name, new_leads, outbound_calls, ...}}
+    rep_meta = []        # {user_id, name, owned_leads, handraiser_breakdown, leads_zero_comms}
+    rep_per_day_by_uid = {}
     for rep_cfg in LANE_2_REPS:
-        rep_row, per_day = build_rep_row(
-            rep_cfg, month_start, month_end, biz_days, calendar_per_rep_per_day
-        )
-        reps.append(rep_row)
-        for day, metrics in per_day.items():
-            if day not in daily_breakdowns:
-                daily_breakdowns[day] = {}
-            daily_breakdowns[day][rep_cfg["user_id"]] = {
-                "name": rep_cfg["name"],
-                **metrics,
-            }
-    reps.sort(key=lambda x: x["owned_leads"], reverse=True)
+        snap, per_day = build_rep_data(rep_cfg, fetch_start, month_end)
+        rep_meta.append({"user_id": rep_cfg["user_id"],
+                          "name": rep_cfg["name"], **snap})
+        rep_per_day_by_uid[rep_cfg["user_id"]] = per_day
 
-    # ─ Scrapers ──────────────────────────────────────────────────────────────
+    # ─ Per-scraper data ───────────────────────────────────────────────────
     print("", flush=True)
-    scrapers = []
-    scraper_daily_breakdowns = {}    # day -> {user_id: {name, meetings_booked, ...}}
-    scraper_calendar = defaultdict(int)             # day -> total meetings booked
-    scraper_calendar_breakdowns = defaultdict(dict) # day -> {scraper_name: count}
+    scraper_meta = []
+    scraper_per_day_by_uid = {}
     for scr_cfg in SCRAPERS:
-        scr_row, scr_per_day = build_scraper_row(scr_cfg, month_start, month_end)
-        scrapers.append(scr_row)
-        for day, metrics in scr_per_day.items():
-            if day not in scraper_daily_breakdowns:
-                scraper_daily_breakdowns[day] = {}
-            scraper_daily_breakdowns[day][scr_cfg["user_id"]] = {
-                "name": scr_cfg["name"],
-                **metrics,
-            }
-            booked = metrics.get("meetings_booked", 0)
-            if booked:
-                scraper_calendar[day] += booked
-                scraper_calendar_breakdowns[day][scr_cfg["name"]] = booked
-    scrapers.sort(key=lambda x: x["meetings_booked_mtd"], reverse=True)
+        per_day = build_scraper_data(scr_cfg, fetch_start, month_end)
+        scraper_meta.append({"user_id": scr_cfg["user_id"],
+                              "name": scr_cfg["name"]})
+        scraper_per_day_by_uid[scr_cfg["user_id"]] = per_day
 
-    # Backfill scraper calendar grid (every day in month -> 0 if no bookings)
-    full_scraper_calendar = {
-        d.isoformat(): scraper_calendar.get(d.isoformat(), 0)
+    # ─ Assemble views for MTD + current WTD ───────────────────────────────
+    reps_mtd     = _build_rep_view(rep_meta, rep_per_day_by_uid,
+                                    month_start, month_end, biz_days_mtd)
+    reps_wtd     = _build_rep_view(rep_meta, rep_per_day_by_uid,
+                                    week_start, week_end_excl, biz_days_wtd)
+    scrapers_mtd = _build_scraper_view(scraper_meta, scraper_per_day_by_uid,
+                                         month_start, month_end)
+    scrapers_wtd = _build_scraper_view(scraper_meta, scraper_per_day_by_uid,
+                                         week_start, week_end_excl)
+
+    # Merge: each rep/scraper has top-level MTD fields + `wtd` sub-block. The
+    # rep snapshots (owned/handraiser/0-comms) live at the top level — they're
+    # "snapshot now" regardless of view, per the locked spec.
+    by_uid_wtd_reps = {r["user_id"]: r for r in reps_wtd}
+    reps_combined = []
+    for r in reps_mtd:
+        w = by_uid_wtd_reps.get(r["user_id"], {})
+        wtd_block = {
+            "activities":                  w.get("activities_mtd", 0),
+            "outbound_calls":              w.get("outbound_calls_mtd", 0),
+            "outbound_emails":             w.get("outbound_emails_mtd", 0),
+            "outbound_calls_per_day_avg":  w.get("outbound_calls_per_day_avg", 0),
+            "outbound_emails_per_day_avg": w.get("outbound_emails_per_day_avg", 0),
+            "calls_booked":                w.get("calls_booked_mtd", 0),
+            "deals_closed":                w.get("deals_closed_mtd", 0),
+            "deals_lost":                  w.get("deals_lost_mtd", 0),
+        }
+        reps_combined.append({**r, "wtd": wtd_block})
+
+    by_uid_wtd_scr = {s["user_id"]: s for s in scrapers_wtd}
+    scrapers_combined = []
+    for s in scrapers_mtd:
+        w = by_uid_wtd_scr.get(s["user_id"], {})
+        wtd_block = {
+            "activities_total":     w.get("activities_mtd_total", 0),
+            "activities_breakdown": w.get("activities_breakdown", {}),
+            "meetings_booked":      w.get("meetings_booked_mtd", 0),
+            "meetings_shown":       w.get("meetings_shown_mtd", 0),
+            "meetings_closed":      w.get("meetings_closed_ever", 0),
+        }
+        scrapers_combined.append({**s, "wtd": wtd_block})
+
+    # ─ Calendar slicing ───────────────────────────────────────────────────
+    full_month_calendar = {
+        d.isoformat(): cal_counts_all.get(d.isoformat(), 0)
         for d in days_in_month(month_start, month_end)
     }
+    month_cal_breakdowns = _slice_dict_by_date(
+        cal_breakdowns_all, month_start.date(), month_end.date()
+    )
+    daily_breakdowns_mtd = _build_daily_breakdowns(
+        rep_meta, rep_per_day_by_uid, cal_per_rep_per_day_all,
+        month_start, month_end
+    )
 
+    week_days = _mon_to_fri(week_start)
+    week_calendar = {d: cal_counts_all.get(d, 0) for d in week_days}
+    week_cal_breakdowns = _slice_dict_by_date(
+        cal_breakdowns_all, week_start.date(), week_end_excl.date()
+    )
+    daily_breakdowns_wtd = _build_daily_breakdowns(
+        rep_meta, rep_per_day_by_uid, cal_per_rep_per_day_all,
+        week_start, week_end_excl
+    )
+
+    month_scraper_calendar, month_scraper_cal_breakdowns = _build_scraper_calendar(
+        scraper_meta, scraper_per_day_by_uid,
+        month_start, month_end,
+        [d.isoformat() for d in days_in_month(month_start, month_end)],
+    )
+    scraper_daily_breakdowns_mtd = _build_scraper_daily_breakdowns(
+        scraper_meta, scraper_per_day_by_uid, month_start, month_end
+    )
+
+    week_scraper_calendar, week_scraper_cal_breakdowns = _build_scraper_calendar(
+        scraper_meta, scraper_per_day_by_uid,
+        week_start, week_end_excl,
+        week_days,
+    )
+    scraper_daily_breakdowns_wtd = _build_scraper_daily_breakdowns(
+        scraper_meta, scraper_per_day_by_uid, week_start, week_end_excl
+    )
+
+    # ─ OUTPUT: data.json (live, has both MTD and WTD) ─────────────────────
     output = {
         "generated_at": now.isoformat(),
         "month": month_label,
         "month_start": month_start.date().isoformat(),
         "month_end": (month_end - timedelta(days=1)).date().isoformat(),
         "today": now.date().isoformat(),
-        "business_days_elapsed": biz_days,
-        "calendar": full_calendar,
-        "calendar_breakdowns": calendar_breakdowns,
-        "daily_breakdowns": daily_breakdowns,
-        "reps": reps,
-        "scrapers": scrapers,
-        "scraper_calendar": full_scraper_calendar,
-        "scraper_calendar_breakdowns": dict(scraper_calendar_breakdowns),
-        "scraper_daily_breakdowns": scraper_daily_breakdowns,
+        "business_days_elapsed": biz_days_mtd,
+        # NEW: week-level metadata + data
+        "week_start": week_start.date().isoformat(),
+        "week_end": (week_end_excl - timedelta(days=1)).date().isoformat(),
+        "week_label": format_week_label(week_start, week_end_excl - timedelta(days=1)),
+        "business_days_elapsed_wtd": biz_days_wtd,
+        # Existing month-level calendar data
+        "calendar": full_month_calendar,
+        "calendar_breakdowns": month_cal_breakdowns,
+        "daily_breakdowns": daily_breakdowns_mtd,
+        "scraper_calendar": month_scraper_calendar,
+        "scraper_calendar_breakdowns": month_scraper_cal_breakdowns,
+        "scraper_daily_breakdowns": scraper_daily_breakdowns_mtd,
+        # NEW: week-level calendar data
+        "week_calendar": week_calendar,
+        "week_calendar_breakdowns": week_cal_breakdowns,
+        "week_daily_breakdowns": daily_breakdowns_wtd,
+        "scraper_week_calendar": week_scraper_calendar,
+        "scraper_week_calendar_breakdowns": week_scraper_cal_breakdowns,
+        "scraper_week_daily_breakdowns": scraper_daily_breakdowns_wtd,
+        # Reps + scrapers (top-level MTD, wtd sub-block)
+        "reps": reps_combined,
+        "scrapers": scrapers_combined,
     }
 
-    # Write live data + monthly archive
     repo_root = Path(__file__).resolve().parent.parent
     (repo_root / "data.json").write_text(json.dumps(output, indent=2))
     print(f"\nwrote {repo_root / 'data.json'}", flush=True)
 
     archives = repo_root / "archives"
     archives.mkdir(exist_ok=True)
-    archive_path = archives / f"data_{month_label}.json"
-    archive_path.write_text(json.dumps(output, indent=2))
-    print(f"wrote {archive_path}", flush=True)
+
+    # Monthly archive — same shape as data.json (so the live HTML can also
+    # render a historical month archive without code changes).
+    monthly_archive = archives / f"data_{month_label}.json"
+    monthly_archive.write_text(json.dumps(output, indent=2))
+    print(f"wrote {monthly_archive}", flush=True)
+
+    # ─ Weekly archives: current week + backfill ───────────────────────────
+    def _write_week_archive(ws, we_excl, label, biz_days):
+        """A week-shaped file: top-level fields hold THAT week's data (no `wtd`
+        nesting). Field names keep their `_mtd`/`_ever` suffixes so the existing
+        HTML renderer reads them unchanged."""
+        wdays = _mon_to_fri(ws)
+        cal = {d: cal_counts_all.get(d, 0) for d in wdays}
+        cal_bd = _slice_dict_by_date(cal_breakdowns_all, ws.date(), we_excl.date())
+        daily_bd = _build_daily_breakdowns(
+            rep_meta, rep_per_day_by_uid, cal_per_rep_per_day_all, ws, we_excl
+        )
+        scr_cal, scr_cal_bd = _build_scraper_calendar(
+            scraper_meta, scraper_per_day_by_uid, ws, we_excl, wdays
+        )
+        scr_daily_bd = _build_scraper_daily_breakdowns(
+            scraper_meta, scraper_per_day_by_uid, ws, we_excl
+        )
+
+        # Reps & scrapers — period totals at top level (this whole file IS the period)
+        rep_view     = _build_rep_view(rep_meta, rep_per_day_by_uid,
+                                        ws, we_excl, biz_days)
+        scraper_view = _build_scraper_view(scraper_meta, scraper_per_day_by_uid,
+                                            ws, we_excl)
+
+        week_archive = {
+            "kind": "week",
+            "generated_at": now.isoformat(),
+            "week_start": ws.date().isoformat(),
+            "week_end":   (we_excl - timedelta(days=1)).date().isoformat(),
+            "week_label": format_week_label(ws, we_excl - timedelta(days=1)),
+            # Compat fields the HTML expects (it doesn't care that they hold week values)
+            "month": month_label,
+            "month_start": ws.date().isoformat(),
+            "month_end":   (we_excl - timedelta(days=1)).date().isoformat(),
+            "today":       (we_excl - timedelta(days=1)).date().isoformat(),
+            "business_days_elapsed": biz_days,
+            "business_days_elapsed_wtd": biz_days,
+            "calendar": cal,
+            "calendar_breakdowns": cal_bd,
+            "daily_breakdowns": daily_bd,
+            "scraper_calendar": scr_cal,
+            "scraper_calendar_breakdowns": scr_cal_bd,
+            "scraper_daily_breakdowns": scr_daily_bd,
+            "reps": rep_view,
+            "scrapers": scraper_view,
+        }
+        path = archives / f"week_{label}.json"
+        path.write_text(json.dumps(week_archive, indent=2))
+        print(f"wrote {path}", flush=True)
+        return path
+
+    _write_week_archive(week_start, week_end_excl, week_iso, biz_days_wtd)
+    for bw in backfill_weeks:
+        if bw["start"] < fetch_start:
+            print(f"  skip backfill {bw['label']} (outside fetch range)", flush=True)
+            continue
+        _write_week_archive(bw["start"], bw["end_exclusive"], bw["label"], 5)
+
+    # ─ Update the navigation index ────────────────────────────────────────
+    _update_archives_index(archives)
 
     print(f"\nDone in {time.time() - started:.1f}s", flush=True)
 
