@@ -347,6 +347,69 @@
     color: var(--text);
     box-shadow: 0 1px 3px rgba(0,0,0,0.06);
   }
+
+  /* ── Period bar (Month/Week toggle + period picker) ─────────────────── */
+  .period-bar {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex-wrap: wrap;
+    padding: 14px 18px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    margin-bottom: 16px;
+    box-shadow: 0 1px 2px rgba(0,0,0,0.02);
+  }
+  .period-bar-label {
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--text-muted);
+  }
+  .period-picker {
+    font-family: inherit;
+    font-size: 13px;
+    color: var(--text);
+    background: var(--stripe);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 6px 10px;
+    cursor: pointer;
+    min-width: 200px;
+  }
+  .period-picker:hover { border-color: var(--text-muted); }
+  .period-picker:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+  /* "snapshot now" inline label — surfaces in week view next to the
+     fields that don't actually re-compute per period (owned leads etc). */
+  .snap-label {
+    display: inline-block;
+    margin-left: 6px;
+    padding: 1px 6px;
+    font-size: 10px;
+    font-weight: 500;
+    letter-spacing: 0.02em;
+    color: var(--text-muted);
+    background: var(--stripe);
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    vertical-align: middle;
+  }
+
+  /* 5-day Mon–Fri strip used in week view */
+  .cal-grid-week {
+    grid-template-columns: repeat(5, 1fr) !important;
+  }
+  .cal-weekdays-week {
+    grid-template-columns: repeat(5, 1fr) !important;
+  }
+  .cal-grid-week > .cal-cell:nth-child(5n+1) .cal-breakdown { left: 0; transform: none; }
+  .cal-grid-week > .cal-cell:nth-child(5n+1) .cal-breakdown::after { left: 20px; transform: none; }
+  .cal-grid-week > .cal-cell:nth-child(5n) .cal-breakdown { left: auto; right: 0; transform: none; }
+  .cal-grid-week > .cal-cell:nth-child(5n) .cal-breakdown::after { left: auto; right: 20px; transform: none; }
+
   .section-head-left {
     display: flex;
     align-items: center;
@@ -598,10 +661,82 @@
 
 <script>
 const WEEKDAY_LABELS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+const WEEK_DAY_LABELS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri'];
 
 // Cached so the side-panel click handler can access without re-fetching
-let DATA = null;
-let CURRENT_VIEW = 'reps';   // 'reps' or 'scrapers' — switched by view toggle
+let RAW_DATA = null;             // original fetch (data.json or an archive file)
+let DATA = null;                 // adapted view: what render() actually consumes
+let CURRENT_VIEW   = 'reps';     // 'reps' or 'scrapers' — Rep/Scraper details toggle
+let CURRENT_PERIOD = 'month';    // 'month' or 'week' — Period toggle
+let INDEX = { months: [], weeks: [] };   // archives/index.json contents
+
+/**
+ * Normalize the raw payload to whatever the current period needs.
+ *
+ *   Weekly archive  (kind=week)              → already shaped for week view; return as-is
+ *   Monthly archive (no week_* fields)       → force period=month
+ *   Live data.json:
+ *     period=month → return as-is (top-level fields are MTD)
+ *     period=week  → overlay week_* calendars and promote each rep.wtd /
+ *                    scraper.wtd block onto the top-level fields so the
+ *                    existing render functions read the WTD values without
+ *                    knowing the period.
+ */
+function adaptView(raw, period) {
+  if (!raw) return raw;
+  if (raw.kind === 'week') {
+    // Surface the week label as the canonical period label so render() picks it up
+    return { ...raw, month: raw.week_label || raw.month, period_kind: 'week' };
+  }
+  const hasWeekFields = !!raw.week_start;
+  if (!hasWeekFields && period === 'week') period = 'month';
+  if (period === 'month') return raw;
+
+  return {
+    ...raw,
+    // Calendar swaps to the 5-day strip
+    calendar:                          raw.week_calendar                          || {},
+    calendar_breakdowns:               raw.week_calendar_breakdowns               || {},
+    daily_breakdowns:                  raw.week_daily_breakdowns                  || {},
+    scraper_calendar:                  raw.scraper_week_calendar                  || {},
+    scraper_calendar_breakdowns:       raw.scraper_week_calendar_breakdowns       || {},
+    scraper_daily_breakdowns:          raw.scraper_week_daily_breakdowns          || {},
+    business_days_elapsed:             raw.business_days_elapsed_wtd              || 1,
+    // Header label switches from "2026-06" to "Jun 8 – 12, 2026"
+    month:        raw.week_label || raw.month,
+    period_kind:  'week',
+    // Reps: promote wtd block onto the field names the renderers already use
+    reps: (raw.reps || []).map(r => {
+      const w = r.wtd || {};
+      return {
+        ...r,
+        activities_mtd:                w.activities      ?? 0,
+        outbound_calls_mtd:            w.outbound_calls  ?? 0,
+        outbound_emails_mtd:           w.outbound_emails ?? 0,
+        outbound_calls_per_day_avg:    w.outbound_calls_per_day_avg  ?? 0,
+        outbound_emails_per_day_avg:   w.outbound_emails_per_day_avg ?? 0,
+        calls_booked_mtd:              w.calls_booked    ?? 0,
+        deals_closed_mtd:              w.deals_closed    ?? 0,
+        deals_lost_mtd:                w.deals_lost      ?? 0,
+      };
+    }),
+    scrapers: (raw.scrapers || []).map(s => {
+      const w = s.wtd || {};
+      return {
+        ...s,
+        activities_mtd_total:  w.activities_total      ?? 0,
+        activities_breakdown:  w.activities_breakdown  ?? {},
+        meetings_booked_mtd:   w.meetings_booked       ?? 0,
+        meetings_shown_mtd:    w.meetings_shown        ?? 0,
+        meetings_closed_ever:  w.meetings_closed       ?? 0,
+      };
+    }),
+  };
+}
+
+function isWeekView(data) {
+  return data && (data.kind === 'week' || data.period_kind === 'week');
+}
 
 function fmtInt(n) {
   if (n == null) return '—';
@@ -662,8 +797,10 @@ function renderCalendar(data, view) {
   const days = Object.keys(cal).sort();
   if (!days.length) return '<div class="calendar"><em>No days.</em></div>';
 
-  const first = dateFromKey(days[0]);
-  const leadingBlanks = first.getUTCDay();
+  // Week mode = 5 Mon-Fri cells in a single row. Driven only by the
+  // explicit week flag, not by day count (a month early in its first week
+  // would also have just 5 days).
+  const weekMode = isWeekView(data);
 
   const counts = days.map(k => cal[k] || 0);
   const maxCount = Math.max(0, ...counts);
@@ -672,8 +809,12 @@ function renderCalendar(data, view) {
   const noun = isScraper ? 'meeting' : 'lead';
 
   const cells = [];
-  for (let i = 0; i < leadingBlanks; i++) {
-    cells.push('<div class="cal-cell empty"></div>');
+  if (!weekMode) {
+    const first = dateFromKey(days[0]);
+    const leadingBlanks = first.getUTCDay();
+    for (let i = 0; i < leadingBlanks; i++) {
+      cells.push('<div class="cal-cell empty"></div>');
+    }
   }
   for (const k of days) {
     const c = cal[k] || 0;
@@ -703,12 +844,15 @@ function renderCalendar(data, view) {
     `);
   }
 
-  const weekdayHeaders = WEEKDAY_LABELS.map(w => `<div>${w}</div>`).join('');
+  const labels = weekMode ? WEEK_DAY_LABELS : WEEKDAY_LABELS;
+  const weekdayHeaders = labels.map(w => `<div>${w}</div>`).join('');
+  const wdClass = weekMode ? 'cal-weekdays cal-weekdays-week' : 'cal-weekdays';
+  const gridClass = weekMode ? 'cal-grid cal-grid-week' : 'cal-grid';
 
   return `
     <div class="calendar">
-      <div class="cal-weekdays">${weekdayHeaders}</div>
-      <div class="cal-grid">${cells.join('')}</div>
+      <div class="${wdClass}">${weekdayHeaders}</div>
+      <div class="${gridClass}">${cells.join('')}</div>
     </div>
   `;
 }
@@ -739,6 +883,8 @@ function renderReps(data) {
   if (!reps.length) return '<p style="padding:20px;color:var(--text-muted)">No reps configured.</p>';
 
   const bizDays = Math.max(data.business_days_elapsed || 1, 1);
+  const weekView = isWeekView(data);
+  const snapTag = weekView ? '<span class="snap-label">snapshot&nbsp;now</span>' : '';
 
   // Aggregate handraiser breakdown for the totals row
   const aggBreak = {};
@@ -794,9 +940,9 @@ function renderReps(data) {
         <thead>
           <tr>
             <th>Rep</th>
-            <th># Owned Leads</th>
+            <th># Owned Leads${snapTag}</th>
             <th class="num"># Activities</th>
-            <th class="num">Leads w/ 0 Comms</th>
+            <th class="num">Leads w/ 0 Comms${snapTag}</th>
             <th class="num">Avg Outbound Calls /day</th>
             <th class="num">Avg Outbound Emails /day</th>
             <th class="num">Calls Booked</th>
@@ -903,53 +1049,106 @@ function renderScrapers(data) {
   `;
 }
 
-function render(data) {
-  const view = CURRENT_VIEW;  // 'reps' or 'scrapers'
+function render(rawData) {
+  // RAW_DATA is the unmodified payload (lets us toggle period without re-fetching).
+  // DATA is the period-adapted view that the rest of render() consumes.
+  RAW_DATA = rawData;
+  const data = adaptView(rawData, CURRENT_PERIOD);
+  DATA = data;
 
-  // KPIs depend on view
+  const view = CURRENT_VIEW;            // 'reps' or 'scrapers'
+  const weekMode = isWeekView(data);
+  const periodNoun = weekMode ? 'WTD' : 'MTD';
+
+  // KPIs depend on view + period
   let kpi1, kpi2, kpi3, kpi4;
-  const monthLabel = data.month || data.month_label || '';
+  const periodLabel = data.month || data.month_label || '';
   if (view === 'reps') {
     const totalCalendar = Object.values(data.calendar || {}).reduce((s, n) => s + (n || 0), 0);
     const totalOwned = (data.reps || []).reduce((s, r) => s + (r.owned_leads || 0), 0);
     const totalZero = (data.reps || []).reduce((s, r) => s + (r.leads_zero_comms || 0), 0);
     const totalBooked = (data.reps || []).reduce((s, r) => s + (r.calls_booked_mtd || 0), 0);
-    kpi1 = { label: 'Assignments MTD',    value: totalCalendar };
-    kpi2 = { label: 'Owned Leads (Now)',  value: totalOwned    };
-    kpi3 = { label: 'Leads w/ 0 Comms',   value: totalZero     };
-    kpi4 = { label: 'Calls Booked MTD',   value: totalBooked   };
+    kpi1 = { label: `Assignments ${periodNoun}`, value: totalCalendar };
+    kpi2 = { label: 'Owned Leads (Now)',         value: totalOwned    };
+    kpi3 = { label: 'Leads w/ 0 Comms',          value: totalZero     };
+    kpi4 = { label: `Calls Booked ${periodNoun}`, value: totalBooked  };
   } else {
     const totalBooked = (data.scrapers || []).reduce((s, r) => s + (r.meetings_booked_mtd || 0), 0);
     const totalShown  = (data.scrapers || []).reduce((s, r) => s + (r.meetings_shown_mtd  || 0), 0);
     const totalClosed = (data.scrapers || []).reduce((s, r) => s + (r.meetings_closed_ever || 0), 0);
     const totalActs   = (data.scrapers || []).reduce((s, r) => s + (r.activities_mtd_total || 0), 0);
-    kpi1 = { label: 'Meetings Booked MTD', value: totalBooked };
-    kpi2 = { label: 'Meetings Shown',      value: totalShown };
-    kpi3 = { label: 'Meetings Closed',     value: totalClosed };
-    kpi4 = { label: 'Activities MTD',      value: totalActs };
+    kpi1 = { label: `Meetings Booked ${periodNoun}`, value: totalBooked };
+    kpi2 = { label: 'Meetings Shown',                value: totalShown };
+    kpi3 = { label: 'Meetings Closed',               value: totalClosed };
+    kpi4 = { label: `Activities ${periodNoun}`,      value: totalActs };
   }
 
   const calendarHeading = view === 'reps'
-    ? `Lead assignments — ${monthLabel}`
-    : `Meetings booked — ${monthLabel}`;
+    ? `Lead assignments — ${periodLabel}`
+    : `Meetings booked — ${periodLabel}`;
   const calendarHelper = view === 'reps'
     ? 'Click any day for a per-rep breakdown. Hover for handraiser mix.'
     : 'Click any day for a per-scraper breakdown. Hover for the scraper split.';
   const detailsHelper = view === 'reps'
-    ? 'Owned leads = snapshot now · Activity/deal metrics = MTD · 0-comms = ever'
-    : 'Activities = outbound only, MTD · Meetings Booked = MTD by First Sales Call date · Closed = ever closed-won';
+    ? (weekMode
+        ? `Owned leads / handraisers / 0-comms = snapshot now · Activity & deal metrics = WTD (Mon–Fri)`
+        : `Owned leads = snapshot now · Activity/deal metrics = MTD · 0-comms = ever`)
+    : (weekMode
+        ? `Activities = outbound only, WTD · Meetings Booked = WTD by First Sales Call date · Closed = ever closed-won`
+        : `Activities = outbound only, MTD · Meetings Booked = MTD by First Sales Call date · Closed = ever closed-won`);
+
+  // Build the picker options for the current period
+  const periodPickerOptions = (() => {
+    const opts = [];
+    const isLive = (rawData.__source === 'live');
+    if (CURRENT_PERIOD === 'month') {
+      const currentMonth = (isLive ? (rawData.month || '') : '');
+      opts.push(`<option value="current" ${isLive ? 'selected' : ''}>Current month${currentMonth ? ': ' + currentMonth : ''}</option>`);
+      for (const m of (INDEX.months || [])) {
+        // Hide the live current-month entry from the archive list to avoid two "current" rows
+        if (isLive && m.key === rawData.month) continue;
+        const selected = (!isLive && rawData.month === m.key) ? 'selected' : '';
+        opts.push(`<option value="${m.key}" ${selected}>${m.label}</option>`);
+      }
+    } else {
+      const currentWeek = (isLive ? (rawData.week_label || '') : '');
+      opts.push(`<option value="current" ${isLive ? 'selected' : ''}>Current week${currentWeek ? ': ' + currentWeek : ''}</option>`);
+      for (const w of (INDEX.weeks || [])) {
+        if (isLive && w.key === rawData.week_start) continue;
+        const selected = (!isLive && rawData.week_start === w.key) ? 'selected' : '';
+        opts.push(`<option value="${w.key}" ${selected}>${w.label}</option>`);
+      }
+    }
+    return opts.join('');
+  })();
+
+  // Subtitle: what period are we looking at
+  const subtitle = weekMode
+    ? `${periodLabel} (Mon–Fri) · Lane 2 weekly snapshot`
+    : `${periodLabel} · Lane 2 lead assignments &amp; rep activity`;
 
   document.getElementById('root').innerHTML = `
     <header class="dash-header">
       <div class="title-block">
         <h1>Lane 2 Activity</h1>
-        <div class="subtitle">${monthLabel} · Lane 2 lead assignments &amp; rep activity</div>
+        <div class="subtitle">${subtitle}</div>
       </div>
       <div class="header-meta">
         <span><span class="live-dot"></span>Updated ${fmtUpdated(data.generated_at)}</span>
         <a href="archive.html">View archive →</a>
       </div>
     </header>
+
+    <div class="period-bar">
+      <span class="period-bar-label">Period</span>
+      <div class="view-toggle" role="tablist" aria-label="Switch between month and week views">
+        <button onclick="switchPeriod('month')" class="${CURRENT_PERIOD === 'month' ? 'active' : ''}" role="tab" aria-selected="${CURRENT_PERIOD === 'month'}">Month</button>
+        <button onclick="switchPeriod('week')"  class="${CURRENT_PERIOD === 'week'  ? 'active' : ''}" role="tab" aria-selected="${CURRENT_PERIOD === 'week'}">Week (Mon–Fri)</button>
+      </div>
+      <select class="period-picker" onchange="pickPeriod(this.value)" aria-label="${CURRENT_PERIOD === 'month' ? 'Choose month' : 'Choose week'}">
+        ${periodPickerOptions}
+      </select>
+    </div>
 
     <div class="kpi-strip">
       <div class="kpi">
@@ -998,18 +1197,79 @@ function render(data) {
   `;
 }
 
+async function switchPeriod(p) {
+  if (p === CURRENT_PERIOD) return;
+  CURRENT_PERIOD = p;
+  // If we're looking at any archive, snap back to live when switching periods —
+  // an archive only fully represents one period. (Live data has both.)
+  if (RAW_DATA && RAW_DATA.__source !== 'live') {
+    await reloadLive();
+    return;
+  }
+  if (RAW_DATA) render(RAW_DATA);
+}
+
+async function reloadLive() {
+  try {
+    const r = await fetch('data.json', { cache: 'no-store' });
+    if (r.ok) {
+      const d = await r.json();
+      d.__source = 'live';
+      render(d);
+    }
+  } catch (e) { console.error(e); }
+}
+
+async function pickPeriod(key) {
+  if (key === 'current') { await reloadLive(); return; }
+  const url = (CURRENT_PERIOD === 'month')
+    ? `archives/data_${key}.json`
+    : `archives/week_${key}.json`;
+  try {
+    const r = await fetch(url, { cache: 'no-store' });
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    const d = await r.json();
+    d.__source = (CURRENT_PERIOD === 'month') ? 'month_archive' : 'week_archive';
+    render(d);
+  } catch (e) {
+    console.error('Failed to load archive', url, e);
+    alert('Could not load that archive. Check the console for details.');
+  }
+}
+
+async function loadIndex() {
+  try {
+    const r = await fetch('archives/index.json', { cache: 'no-store' });
+    if (r.ok) {
+      INDEX = await r.json();
+      // Normalize: older index files may use plain string arrays
+      if (Array.isArray(INDEX.months) && INDEX.months.length && typeof INDEX.months[0] === 'string') {
+        INDEX.months = INDEX.months.map(m => ({ key: m, label: m }));
+      }
+      if (Array.isArray(INDEX.weeks) && INDEX.weeks.length && typeof INDEX.weeks[0] === 'string') {
+        INDEX.weeks = INDEX.weeks.map(w => ({ key: w, label: w }));
+      }
+    }
+  } catch (e) { /* nav-only failure; render still works */ }
+}
+
 function switchView(v) {
   if (v === CURRENT_VIEW) return;
   CURRENT_VIEW = v;
-  if (DATA) render(DATA);
+  if (RAW_DATA) render(RAW_DATA);
 }
 
 async function main() {
   try {
-    const resp = await fetch('data.json', { cache: 'no-store' });
+    // Load index in parallel with the dashboard data; it only powers nav so
+    // failure is non-fatal.
+    const [_, resp] = await Promise.all([
+      loadIndex(),
+      fetch('data.json', { cache: 'no-store' }),
+    ]);
     if (!resp.ok) throw new Error('HTTP ' + resp.status);
     const data = await resp.json();
-    DATA = data;
+    data.__source = 'live';
     render(data);
   } catch (e) {
     document.getElementById('root').innerHTML =
@@ -1196,6 +1456,8 @@ document.addEventListener('keydown', (e) => {
 window.openSidePanel = openSidePanel;
 window.closeSidePanel = closeSidePanel;
 window.switchView = switchView;
+window.switchPeriod = switchPeriod;
+window.pickPeriod = pickPeriod;
 
 main();
 </script>
