@@ -434,7 +434,10 @@ async function main() {
     const r = await fetch('archives/index.json', { cache: 'no-store' });
     if (!r.ok) throw new Error('HTTP ' + r.status);
     const idx = await r.json();
-    const months = (idx.months || []).sort().reverse();
+    // index.json now has {months: [{key, label}], weeks: [{key, label}]}; older runs
+    // wrote plain string arrays. Accept both.
+    let months = (idx.months || []).map(m => (typeof m === 'string' ? m : m.key));
+    months = months.sort().reverse();
     const sel = document.getElementById('month-picker');
     sel.innerHTML = months.map(m => `<option value="${m}">${monthLabel(m)}</option>`).join('');
     sel.addEventListener('change', e => loadMonth(e.target.value));
