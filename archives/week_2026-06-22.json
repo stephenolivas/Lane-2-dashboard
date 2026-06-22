@@ -1,6 +1,6 @@
 {
   "kind": "week",
-  "generated_at": "2026-06-22T13:00:28.196414-07:00",
+  "generated_at": "2026-06-22T13:19:06.356874-07:00",
   "week_start": "2026-06-22",
   "week_end": "2026-06-26",
   "week_label": "Jun 22 \u2013 26, 2026",
@@ -11,7 +11,7 @@
   "business_days_elapsed": 1,
   "business_days_elapsed_wtd": 1,
   "calendar": {
-    "2026-06-22": 57,
+    "2026-06-22": 58,
     "2026-06-23": 0,
     "2026-06-24": 0,
     "2026-06-25": 0,
@@ -23,9 +23,9 @@
       "LTF All Booked / Did Not Convert": 5,
       "Prior Day Lost Deals": 5,
       "30 Day Aged Deals": 2,
+      "LTF Course Purchased / Did Not Book": 2,
       "No Activity / Past 30 Days": 2,
       "Typeform Entry / Did Not Book": 2,
-      "LTF Course Purchased / Did Not Book": 1,
       "Webinar - Attended / Did Not Book": 1,
       "Webinar - Registered / Did Not Attend": 1,
       "(unset)": 11
@@ -43,7 +43,7 @@
       },
       "user_WquWudQN7dghZsAPiNY80eJUmg1EadQg2UCQdvgbif7": {
         "name": "Kelly Schrader",
-        "new_leads": 11,
+        "new_leads": 12,
         "outbound_calls": 3,
         "outbound_emails": 0,
         "calls_booked": 0,
@@ -85,6 +85,12 @@
     "2026-06-26": 2
   },
   "scraper_calendar_breakdowns": {
+    "2026-06-22": {
+      "Vince Bartolini": 5,
+      "William Nowak": 8,
+      "Jacob Hepner": 2,
+      "Jennifer Padilla": 3
+    },
     "2026-06-24": {
       "Vince Bartolini": 2,
       "Jacob Hepner": 2,
@@ -92,12 +98,6 @@
     },
     "2026-06-25": {
       "Vince Bartolini": 2
-    },
-    "2026-06-22": {
-      "Vince Bartolini": 5,
-      "William Nowak": 8,
-      "Jacob Hepner": 2,
-      "Jennifer Padilla": 3
     },
     "2026-06-23": {
       "Vince Bartolini": 3,
@@ -112,21 +112,19 @@
     }
   },
   "scraper_daily_breakdowns": {
-    "2026-06-25": {
+    "2026-06-23": {
       "user_dQi0iL0igjCKtEXPSsv8ALDZMAz9orJxL60O7Q921jy": {
         "name": "Vince Bartolini",
-        "meetings_booked": 2,
+        "meetings_booked": 3,
         "meetings_shown": 0,
         "meetings_closed": 0,
         "outbound_calls": 0,
         "outbound_emails": 0,
         "outbound_sms": 0
-      }
-    },
-    "2026-06-24": {
-      "user_dQi0iL0igjCKtEXPSsv8ALDZMAz9orJxL60O7Q921jy": {
-        "name": "Vince Bartolini",
-        "meetings_booked": 2,
+      },
+      "user_ZNKG1S9eI71qxhSozBK4jskTVtJqXzfNCPWqmADRR9F": {
+        "name": "William Nowak",
+        "meetings_booked": 3,
         "meetings_shown": 0,
         "meetings_closed": 0,
         "outbound_calls": 0,
@@ -135,6 +133,15 @@
       },
       "user_IeWR2TlhpjqoXy3K6jX7u9C8c83iBnHXSIvFZpotF3z": {
         "name": "Jacob Hepner",
+        "meetings_booked": 3,
+        "meetings_shown": 0,
+        "meetings_closed": 0,
+        "outbound_calls": 0,
+        "outbound_emails": 0,
+        "outbound_sms": 0
+      },
+      "user_E2WNDcnSES6SFuqyEulrIakLepLqJzHIimWaovDFkhK": {
+        "name": "Juan Cajina",
         "meetings_booked": 2,
         "meetings_shown": 0,
         "meetings_closed": 0,
@@ -144,7 +151,7 @@
       },
       "user_QgFeDsKkV4fsOtkTYeOJMURXPqqhZA8d4kHbE8rzat7": {
         "name": "Jennifer Padilla",
-        "meetings_booked": 3,
+        "meetings_booked": 2,
         "meetings_shown": 0,
         "meetings_closed": 0,
         "outbound_calls": 0,
@@ -158,16 +165,16 @@
         "meetings_booked": 5,
         "meetings_shown": 2,
         "meetings_closed": 0,
-        "outbound_calls": 113,
-        "outbound_emails": 234,
-        "outbound_sms": 893
+        "outbound_calls": 124,
+        "outbound_emails": 249,
+        "outbound_sms": 931
       },
       "user_ZNKG1S9eI71qxhSozBK4jskTVtJqXzfNCPWqmADRR9F": {
         "name": "William Nowak",
         "meetings_booked": 8,
         "meetings_shown": 3,
         "meetings_closed": 0,
-        "outbound_calls": 38,
+        "outbound_calls": 39,
         "outbound_emails": 0,
         "outbound_sms": 17
       },
@@ -176,9 +183,9 @@
         "meetings_booked": 2,
         "meetings_shown": 0,
         "meetings_closed": 0,
-        "outbound_calls": 23,
-        "outbound_emails": 43,
-        "outbound_sms": 66
+        "outbound_calls": 25,
+        "outbound_emails": 45,
+        "outbound_sms": 71
       },
       "user_E2WNDcnSES6SFuqyEulrIakLepLqJzHIimWaovDFkhK": {
         "name": "Juan Cajina",
@@ -194,24 +201,26 @@
         "meetings_booked": 3,
         "meetings_shown": 0,
         "meetings_closed": 0,
-        "outbound_calls": 0,
+        "outbound_calls": 3,
         "outbound_emails": 57,
-        "outbound_sms": 68
+        "outbound_sms": 70
       }
     },
-    "2026-06-23": {
+    "2026-06-25": {
       "user_dQi0iL0igjCKtEXPSsv8ALDZMAz9orJxL60O7Q921jy": {
         "name": "Vince Bartolini",
-        "meetings_booked": 3,
+        "meetings_booked": 2,
         "meetings_shown": 0,
         "meetings_closed": 0,
         "outbound_calls": 0,
         "outbound_emails": 0,
         "outbound_sms": 0
-      },
-      "user_ZNKG1S9eI71qxhSozBK4jskTVtJqXzfNCPWqmADRR9F": {
-        "name": "William Nowak",
-        "meetings_booked": 3,
+      }
+    },
+    "2026-06-24": {
+      "user_dQi0iL0igjCKtEXPSsv8ALDZMAz9orJxL60O7Q921jy": {
+        "name": "Vince Bartolini",
+        "meetings_booked": 2,
         "meetings_shown": 0,
         "meetings_closed": 0,
         "outbound_calls": 0,
@@ -220,15 +229,6 @@
       },
       "user_IeWR2TlhpjqoXy3K6jX7u9C8c83iBnHXSIvFZpotF3z": {
         "name": "Jacob Hepner",
-        "meetings_booked": 3,
-        "meetings_shown": 0,
-        "meetings_closed": 0,
-        "outbound_calls": 0,
-        "outbound_emails": 0,
-        "outbound_sms": 0
-      },
-      "user_E2WNDcnSES6SFuqyEulrIakLepLqJzHIimWaovDFkhK": {
-        "name": "Juan Cajina",
         "meetings_booked": 2,
         "meetings_shown": 0,
         "meetings_closed": 0,
@@ -238,7 +238,7 @@
       },
       "user_QgFeDsKkV4fsOtkTYeOJMURXPqqhZA8d4kHbE8rzat7": {
         "name": "Jennifer Padilla",
-        "meetings_booked": 2,
+        "meetings_booked": 3,
         "meetings_shown": 0,
         "meetings_closed": 0,
         "outbound_calls": 0,
@@ -286,7 +286,7 @@
         "Internal Webinar": 1
       },
       "leads_zero_comms": 1,
-      "activities_mtd": 62,
+      "activities_mtd": 63,
       "outbound_calls_mtd": 1,
       "outbound_emails_mtd": 17,
       "outbound_calls_per_day_avg": 1.0,
@@ -401,11 +401,11 @@
     {
       "user_id": "user_dQi0iL0igjCKtEXPSsv8ALDZMAz9orJxL60O7Q921jy",
       "name": "Vince Bartolini",
-      "activities_mtd_total": 1240,
+      "activities_mtd_total": 1304,
       "activities_breakdown": {
-        "outbound_calls": 113,
-        "outbound_emails": 234,
-        "outbound_sms": 893
+        "outbound_calls": 124,
+        "outbound_emails": 249,
+        "outbound_sms": 931
       },
       "meetings_booked_mtd": 12,
       "meetings_shown_mtd": 2,
@@ -414,9 +414,9 @@
     {
       "user_id": "user_ZNKG1S9eI71qxhSozBK4jskTVtJqXzfNCPWqmADRR9F",
       "name": "William Nowak",
-      "activities_mtd_total": 55,
+      "activities_mtd_total": 56,
       "activities_breakdown": {
-        "outbound_calls": 38,
+        "outbound_calls": 39,
         "outbound_emails": 0,
         "outbound_sms": 17
       },
@@ -427,11 +427,11 @@
     {
       "user_id": "user_QgFeDsKkV4fsOtkTYeOJMURXPqqhZA8d4kHbE8rzat7",
       "name": "Jennifer Padilla",
-      "activities_mtd_total": 125,
+      "activities_mtd_total": 130,
       "activities_breakdown": {
-        "outbound_calls": 0,
+        "outbound_calls": 3,
         "outbound_emails": 57,
-        "outbound_sms": 68
+        "outbound_sms": 70
       },
       "meetings_booked_mtd": 9,
       "meetings_shown_mtd": 0,
@@ -440,11 +440,11 @@
     {
       "user_id": "user_IeWR2TlhpjqoXy3K6jX7u9C8c83iBnHXSIvFZpotF3z",
       "name": "Jacob Hepner",
-      "activities_mtd_total": 132,
+      "activities_mtd_total": 141,
       "activities_breakdown": {
-        "outbound_calls": 23,
-        "outbound_emails": 43,
-        "outbound_sms": 66
+        "outbound_calls": 25,
+        "outbound_emails": 45,
+        "outbound_sms": 71
       },
       "meetings_booked_mtd": 8,
       "meetings_shown_mtd": 0,
