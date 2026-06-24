@@ -696,17 +696,15 @@ def fetch_scraper_activities_per_day(user_id, fetch_start):
 
 
 def fetch_scraper_meetings_per_day(setter_value, fetch_start, fetch_end_exclusive):
-    """Per-day buckets for booked / shown / closed meetings credited to a scraper,
-    across [fetch_start, fetch_end_exclusive].
+    """Per-day buckets for booked / shown meetings credited to a scraper, across
+    [fetch_start, fetch_end_exclusive].
 
-    A "meeting booked by X" = lead where:
-      - custom.{Setter Name} == setter_value
-      - custom.{First Sales Call Booked Date} in [fetch_start, fetch_end]
-      - funnel is not LTF
+    Booked = leads where Setter Name = scraper AND First Sales Call Booked Date in
+    period AND funnel != LTF. Day = First Sales Call Booked Date.
+    Shown  = of those, First Call Show Up = "Yes".
 
-    For each qualifying lead, day is its First Sales Call Booked Date.
-    Shown:  custom.{First Call Show Up} = "Yes"
-    Closed: ANY opportunity on the lead has status_type = won (any date, "ever")
+    Closes / revenue are computed separately via fetch_scraper_closes_per_day, using
+    the close-date attribution model (credit by date_won, not by booking date).
     """
     start_d = fetch_start.date().isoformat()
     end_d   = (fetch_end_exclusive - timedelta(seconds=1)).date().isoformat()
@@ -716,17 +714,14 @@ def fetch_scraper_meetings_per_day(setter_value, fetch_start, fetch_end_exclusiv
         f'custom.{FIELD_FIRST_CALL_BOOKED}<="{end_d}"'
     )
     fields = (
-        "id,display_name,opportunities,"
+        f"id,"
         f"custom.{FIELD_FIRST_CALL_BOOKED},"
         f"custom.{FIELD_FIRST_CALL_SHOWUP},"
         f"custom.{FIELD_FUNNEL_NAME}"
     )
 
-    booked_pd       = defaultdict(int)
-    shown_pd        = defaultdict(int)
-    closed_pd       = defaultdict(int)
-    revenue_pd      = defaultdict(float)   # $ from won opps on closed leads, in dollars
-    closed_leads_pd = defaultdict(list)    # day -> [{lead_id, lead_name, value}, ...]
+    booked_pd = defaultdict(int)
+    shown_pd  = defaultdict(int)
 
     for ld in close_paginate_skip("/lead/", {"query": q, "_fields": fields}):
         if get_custom(ld, FIELD_FUNNEL_NAME) in EXCLUDED_FUNNELS:
@@ -741,29 +736,111 @@ def fetch_scraper_meetings_per_day(setter_value, fetch_start, fetch_end_exclusiv
         if show_up == "yes":
             shown_pd[day] += 1
 
-        opps = ld.get("opportunities") or []
-        won_opps = [opp for opp in opps if (opp or {}).get("status_type") == "won"]
-        if won_opps:
-            closed_pd[day] += 1
-            # Close stores opportunity value in cents — convert to dollars.
-            # Sum all won opps on the lead (rare to have >1, but be safe).
-            lead_value = sum(
-                int((opp or {}).get("value") or 0) for opp in won_opps
-            ) / 100.0
-            revenue_pd[day] += lead_value
-            closed_leads_pd[day].append({
-                "lead_id":   ld.get("id"),
-                "lead_name": ld.get("display_name") or "(unnamed lead)",
-                "value":     round(lead_value, 2),
-                "won_count": len(won_opps),
+    return {
+        "meetings_booked": dict(booked_pd),
+        "meetings_shown":  dict(shown_pd),
+    }
+
+
+def fetch_scraper_closes_per_day(scrapers, fetch_start, fetch_end_exclusive):
+    """Close-date attribution for scraper closes / revenue.
+
+    Queries every won opportunity org-wide whose `date_won` falls in the period,
+    then looks up each lead once to find its Setter Name + Funnel + display name.
+    Credits the matching scraper on the date the deal was won (PT), regardless of
+    when the original sales call was booked. LTF leads are excluded.
+
+    Returns:
+      {
+        scraper_user_id: {
+          "meetings_closed":         {day: count},
+          "meetings_closed_revenue": {day: dollars},
+          "meetings_closed_leads":   {day: [{lead_id, lead_name, value, won_count}, ...]},
+        },
+        ...
+      }
+    """
+    setter_to_uid = {s["setter_field_value"]: s["user_id"] for s in scrapers}
+
+    start_iso = fetch_start.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    end_iso   = fetch_end_exclusive.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    # 1) Pull every won opp in the period (single org-wide query) and group by lead.
+    leads_to_opps = defaultdict(list)
+    opp_count = 0
+    for opp in close_paginate_skip("/opportunity/", {
+        "status_type":     "won",
+        "date_won__gte":   start_iso,
+        "date_won__lt":    end_iso,
+        "_fields":         "id,lead_id,value,date_won",
+    }):
+        opp_count += 1
+        if opp.get("lead_id") and opp.get("date_won"):
+            leads_to_opps[opp["lead_id"]].append(opp)
+    print(f"  closes-in-period: {opp_count} won opps across {len(leads_to_opps)} unique leads",
+          flush=True)
+
+    # 2) Look up each lead once to find setter + funnel + name. Only leads whose
+    #    setter is one of our scrapers get credited.
+    out = {
+        s["user_id"]: {
+            "meetings_closed":         defaultdict(int),
+            "meetings_closed_revenue": defaultdict(float),
+            "meetings_closed_leads":   defaultdict(list),
+        } for s in scrapers
+    }
+
+    matched_leads = 0
+    for lead_id, opps in leads_to_opps.items():
+        try:
+            ld = close_get(f"/lead/{lead_id}/", {
+                "_fields": (
+                    "id,display_name,"
+                    f"custom.{FIELD_SETTER_NAME},"
+                    f"custom.{FIELD_FUNNEL_NAME}"
+                )
+            })
+        except requests.HTTPError:
+            continue
+
+        if get_custom(ld, FIELD_FUNNEL_NAME) in EXCLUDED_FUNNELS:
+            continue
+
+        setter = (get_custom(ld, FIELD_SETTER_NAME) or "").strip()
+        if not setter or setter not in setter_to_uid:
+            continue
+
+        scraper_uid = setter_to_uid[setter]
+        lead_name = ld.get("display_name") or "(unnamed lead)"
+        matched_leads += 1
+
+        # Bucket each opp under its date_won (in PT); for the lead-level "closed" count
+        # and the closed_leads list, group same-day opps so one lead = one row per day.
+        opps_by_day = defaultdict(list)
+        for opp in opps:
+            try:
+                dt = datetime.fromisoformat(opp["date_won"].replace("Z", "+00:00"))
+                day = dt.astimezone(TIMEZONE).date().isoformat()
+                opps_by_day[day].append(opp)
+            except ValueError:
+                continue
+
+        for day, day_opps in opps_by_day.items():
+            out[scraper_uid]["meetings_closed"][day] += 1
+            day_value = sum(int(o.get("value") or 0) for o in day_opps) / 100.0
+            out[scraper_uid]["meetings_closed_revenue"][day] += day_value
+            out[scraper_uid]["meetings_closed_leads"][day].append({
+                "lead_id":   lead_id,
+                "lead_name": lead_name,
+                "value":     round(day_value, 2),
+                "won_count": len(day_opps),
             })
 
+    print(f"  closes-in-period: {matched_leads} leads matched a scraper setter", flush=True)
+
     return {
-        "meetings_booked":         dict(booked_pd),
-        "meetings_shown":          dict(shown_pd),
-        "meetings_closed":         dict(closed_pd),
-        "meetings_closed_revenue": dict(revenue_pd),
-        "meetings_closed_leads":   dict(closed_leads_pd),
+        uid: {k: dict(v) for k, v in data.items()}
+        for uid, data in out.items()
     }
 
 
@@ -1062,6 +1139,16 @@ def main():
         scraper_meta.append({"user_id": scr_cfg["user_id"],
                               "name": scr_cfg["name"]})
         scraper_per_day_by_uid[scr_cfg["user_id"]] = per_day
+
+    # Close-date attribution for scraper closes / revenue.  Single org-wide opp
+    # query keyed by date_won → look up each lead → credit the matching scraper.
+    # Catches deals that closed in the period even when the original meeting was
+    # booked months earlier (the booked-in-period model used to miss those).
+    print("\n[scrapers] computing closes-in-period by date_won", flush=True)
+    closes_by_uid = fetch_scraper_closes_per_day(SCRAPERS, fetch_start, month_end)
+    for uid, closes in closes_by_uid.items():
+        if uid in scraper_per_day_by_uid:
+            scraper_per_day_by_uid[uid].update(closes)
 
     # ─ Assemble views for MTD + current WTD ───────────────────────────────
     reps_mtd     = _build_rep_view(rep_meta, rep_per_day_by_uid,
