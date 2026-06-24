@@ -410,6 +410,90 @@
   .cal-grid-week > .cal-cell:nth-child(5n) .cal-breakdown { left: auto; right: 0; transform: none; }
   .cal-grid-week > .cal-cell:nth-child(5n) .cal-breakdown::after { left: auto; right: 20px; transform: none; }
 
+  /* Revenue cell — clickable chevron + expanded detail row */
+  td.rev-cell { padding-right: 18px; }
+  .rev-toggle {
+    background: transparent;
+    border: 0;
+    font: inherit;
+    color: inherit;
+    cursor: pointer;
+    padding: 2px 4px;
+    border-radius: 4px;
+    display: inline-flex;
+    align-items: baseline;
+    gap: 6px;
+    transition: background 0.1s ease;
+  }
+  .rev-toggle:hover { background: var(--stripe); }
+  .rev-toggle:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
+  .rev-toggle .rev-chev {
+    font-size: 10px;
+    color: var(--text-muted);
+    transition: transform 0.12s ease;
+  }
+  .rev-toggle[aria-expanded="true"] .rev-chev { color: var(--text); }
+
+  .rev-detail-row > td {
+    background: var(--stripe);
+    padding: 12px 18px 16px;
+    border-top: 1px dashed var(--border);
+  }
+  .rev-detail-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 6px;
+  }
+  .rev-detail-list li {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 6px 10px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    font-size: 13px;
+  }
+  .rev-detail-list a {
+    color: var(--accent, #2563eb);
+    text-decoration: none;
+    font-weight: 500;
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .rev-detail-list a:hover { text-decoration: underline; }
+  .rev-detail-multi {
+    font-size: 10.5px;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    background: #fef3c7;
+    color: #92400e;
+    padding: 1px 6px;
+    border-radius: 3px;
+  }
+  .rev-detail-day {
+    font-size: 11.5px;
+    color: var(--text-muted);
+    font-variant-numeric: tabular-nums;
+  }
+  .rev-detail-amount {
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+    margin-left: auto;
+    color: var(--text);
+  }
+  .rev-detail-empty {
+    font-size: 13px;
+    color: var(--text-muted);
+    font-style: italic;
+  }
+
   .section-head-left {
     display: flex;
     align-items: center;
@@ -730,6 +814,7 @@ function adaptView(raw, period) {
         meetings_shown_mtd:            w.meetings_shown            ?? 0,
         meetings_closed_ever:          w.meetings_closed           ?? 0,
         meetings_closed_revenue_ever:  w.meetings_closed_revenue   ?? 0,
+        meetings_closed_leads:         w.meetings_closed_leads     ?? [],
       };
     }),
   };
@@ -1000,6 +1085,27 @@ function renderScrapers(data) {
     return '$' + v.toLocaleString();
   };
 
+  // Detail row: list of closed-won leads under a scraper's row,
+  // shown when the user clicks the Revenue Generated cell.
+  const renderClosedLeadsList = (leads) => {
+    if (!leads || !leads.length) {
+      return '<div class="rev-detail-empty">No closed-won leads in this period.</div>';
+    }
+    const items = leads.map(l => {
+      const url  = `https://app.close.com/lead/${encodeURIComponent(l.lead_id || '')}/`;
+      const day  = l.day ? `<span class="rev-detail-day">${l.day}</span>` : '';
+      const multi = (l.won_count && l.won_count > 1)
+        ? `<span class="rev-detail-multi">${l.won_count} deals</span>` : '';
+      return `<li>
+        <a href="${url}" target="_blank" rel="noopener">${l.lead_name || '(unnamed)'}</a>
+        ${multi}
+        ${day}
+        <span class="rev-detail-amount">${fmtMoney(l.value)}</span>
+      </li>`;
+    }).join('');
+    return `<ul class="rev-detail-list">${items}</ul>`;
+  };
+
   let aggActs = 0, aggBooked = 0, aggShown = 0, aggClosed = 0, aggRevenue = 0;
   const aggBreak = { outbound_calls: 0, outbound_emails: 0, outbound_sms: 0 };
   for (const s of scrapers) {
@@ -1013,19 +1119,33 @@ function renderScrapers(data) {
     }
   }
 
-  const rows = scrapers.map(s => `
-    <tr>
-      <td><div class="rep-name">${s.name}</div></td>
-      <td class="owned-cell">
-        <div class="owned-total">Total = ${fmtInt(s.activities_mtd_total)}</div>
-        ${fmtBreakdown(s.activities_breakdown)}
-      </td>
-      <td class="num">${fmtInt(s.meetings_booked_mtd)}</td>
-      <td class="num">${fmtInt(s.meetings_shown_mtd)}</td>
-      <td class="num">${fmtInt(s.meetings_closed_ever)}</td>
-      <td class="num">${fmtMoney(s.meetings_closed_revenue_ever)}</td>
-    </tr>
-  `).join('');
+  const rows = scrapers.map(s => {
+    const rev = s.meetings_closed_revenue_ever || 0;
+    const hasLeads = (s.meetings_closed_leads || []).length > 0;
+    const safeUid = String(s.user_id || s.name || '').replace(/[^a-zA-Z0-9_-]/g, '_');
+    const revCell = (rev > 0 && hasLeads)
+      ? `<button class="rev-toggle" type="button" onclick="toggleRevDetail('${safeUid}')" aria-expanded="false" aria-controls="rev-detail-${safeUid}">
+           <span class="rev-amount">${fmtMoney(rev)}</span>
+           <span class="rev-chev" id="rev-chev-${safeUid}">▸</span>
+         </button>`
+      : fmtMoney(rev);
+    return `
+      <tr>
+        <td><div class="rep-name">${s.name}</div></td>
+        <td class="owned-cell">
+          <div class="owned-total">Total = ${fmtInt(s.activities_mtd_total)}</div>
+          ${fmtBreakdown(s.activities_breakdown)}
+        </td>
+        <td class="num">${fmtInt(s.meetings_booked_mtd)}</td>
+        <td class="num">${fmtInt(s.meetings_shown_mtd)}</td>
+        <td class="num">${fmtInt(s.meetings_closed_ever)}</td>
+        <td class="num rev-cell">${revCell}</td>
+      </tr>
+      <tr class="rev-detail-row" id="rev-detail-${safeUid}" hidden>
+        <td colspan="6">${renderClosedLeadsList(s.meetings_closed_leads)}</td>
+      </tr>
+    `;
+  }).join('');
 
   return `
     <div class="reps-table-wrap">
@@ -1269,6 +1389,22 @@ function switchView(v) {
   if (RAW_DATA) render(RAW_DATA);
 }
 
+function toggleRevDetail(uid) {
+  const row  = document.getElementById('rev-detail-' + uid);
+  const chev = document.getElementById('rev-chev-'   + uid);
+  if (!row) return;
+  const wasHidden = row.hasAttribute('hidden');
+  if (wasHidden) {
+    row.removeAttribute('hidden');
+    if (chev) chev.textContent = '▾';
+  } else {
+    row.setAttribute('hidden', '');
+    if (chev) chev.textContent = '▸';
+  }
+  const btn = row.previousElementSibling?.querySelector('.rev-toggle');
+  if (btn) btn.setAttribute('aria-expanded', wasHidden ? 'true' : 'false');
+}
+
 async function main() {
   try {
     // Load index in parallel with the dashboard data; it only powers nav so
@@ -1468,6 +1604,7 @@ window.closeSidePanel = closeSidePanel;
 window.switchView = switchView;
 window.switchPeriod = switchPeriod;
 window.pickPeriod = pickPeriod;
+window.toggleRevDetail = toggleRevDetail;
 
 main();
 </script>
