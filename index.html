@@ -724,11 +724,12 @@ function adaptView(raw, period) {
       const w = s.wtd || {};
       return {
         ...s,
-        activities_mtd_total:  w.activities_total      ?? 0,
-        activities_breakdown:  w.activities_breakdown  ?? {},
-        meetings_booked_mtd:   w.meetings_booked       ?? 0,
-        meetings_shown_mtd:    w.meetings_shown        ?? 0,
-        meetings_closed_ever:  w.meetings_closed       ?? 0,
+        activities_mtd_total:          w.activities_total          ?? 0,
+        activities_breakdown:          w.activities_breakdown      ?? {},
+        meetings_booked_mtd:           w.meetings_booked           ?? 0,
+        meetings_shown_mtd:            w.meetings_shown            ?? 0,
+        meetings_closed_ever:          w.meetings_closed           ?? 0,
+        meetings_closed_revenue_ever:  w.meetings_closed_revenue   ?? 0,
       };
     }),
   };
@@ -994,13 +995,19 @@ function renderScrapers(data) {
     </div>`;
   };
 
-  let aggActs = 0, aggBooked = 0, aggShown = 0, aggClosed = 0;
+  const fmtMoney = (n) => {
+    const v = Math.round(Number(n) || 0);
+    return '$' + v.toLocaleString();
+  };
+
+  let aggActs = 0, aggBooked = 0, aggShown = 0, aggClosed = 0, aggRevenue = 0;
   const aggBreak = { outbound_calls: 0, outbound_emails: 0, outbound_sms: 0 };
   for (const s of scrapers) {
-    aggActs   += s.activities_mtd_total || 0;
-    aggBooked += s.meetings_booked_mtd  || 0;
-    aggShown  += s.meetings_shown_mtd   || 0;
-    aggClosed += s.meetings_closed_ever || 0;
+    aggActs    += s.activities_mtd_total || 0;
+    aggBooked  += s.meetings_booked_mtd  || 0;
+    aggShown   += s.meetings_shown_mtd   || 0;
+    aggClosed  += s.meetings_closed_ever || 0;
+    aggRevenue += s.meetings_closed_revenue_ever || 0;
     for (const k of Object.keys(aggBreak)) {
       aggBreak[k] += (s.activities_breakdown || {})[k] || 0;
     }
@@ -1016,6 +1023,7 @@ function renderScrapers(data) {
       <td class="num">${fmtInt(s.meetings_booked_mtd)}</td>
       <td class="num">${fmtInt(s.meetings_shown_mtd)}</td>
       <td class="num">${fmtInt(s.meetings_closed_ever)}</td>
+      <td class="num">${fmtMoney(s.meetings_closed_revenue_ever)}</td>
     </tr>
   `).join('');
 
@@ -1029,6 +1037,7 @@ function renderScrapers(data) {
             <th class="num">Meetings Booked</th>
             <th class="num">Meetings Shown</th>
             <th class="num">Meetings Closed</th>
+            <th class="num">Revenue Generated</th>
           </tr>
         </thead>
         <tbody>
@@ -1042,6 +1051,7 @@ function renderScrapers(data) {
             <td class="num">${fmtInt(aggBooked)}</td>
             <td class="num">${fmtInt(aggShown)}</td>
             <td class="num">${fmtInt(aggClosed)}</td>
+            <td class="num">${fmtMoney(aggRevenue)}</td>
           </tr>
         </tbody>
       </table>
