@@ -92,23 +92,41 @@ session.headers.update({"Content-Type": "application/json"})
 
 
 def close_get(path, params=None):
-    """GET to Close API with throttle + simple retry on 429/5xx.
+    """GET to Close API with throttle + retries on 429 / 5xx / network timeouts.
+
+    The /event/ endpoint can occasionally take longer than 30s to respond when
+    paginating through tens of thousands of events. The timeout is set to 60s
+    and any ReadTimeout/ConnectionError is retried with exponential backoff.
 
     On 4xx errors (other than 429), prints the response body before raising
     so we can see what Close actually rejected.
     """
     url = f"{CLOSE_BASE_URL}{path}"
-    for attempt in range(3):
-        r = session.get(url, params=params, timeout=30)
+    max_attempts = 5
+    for attempt in range(max_attempts):
+        try:
+            r = session.get(url, params=params, timeout=60)
+        except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as e:
+            # Transient network problem — retry with backoff
+            if attempt < max_attempts - 1:
+                wait = 2 ** attempt   # 1, 2, 4, 8s
+                print(f"  ⚠ {type(e).__name__} on {path}, "
+                      f"retry {attempt + 1}/{max_attempts - 1} in {wait}s",
+                      flush=True)
+                time.sleep(wait)
+                continue
+            raise
+
         time.sleep(THROTTLE_SECONDS)
         if r.status_code == 429:
             wait = int(r.headers.get("Retry-After", 5))
             print(f"  rate-limited, sleeping {wait}s", flush=True)
             time.sleep(wait)
             continue
-        if 500 <= r.status_code < 600 and attempt < 2:
-            print(f"  {r.status_code} from Close, retrying ({attempt + 1}/3)", flush=True)
-            time.sleep(2 ** attempt)
+        if 500 <= r.status_code < 600 and attempt < max_attempts - 1:
+            wait = 2 ** attempt
+            print(f"  {r.status_code} from Close, retrying ({attempt + 1}/{max_attempts - 1}) in {wait}s", flush=True)
+            time.sleep(wait)
             continue
         if not r.ok:
             # Surface what Close actually said before raising — generic
@@ -120,7 +138,7 @@ def close_get(path, params=None):
                 print(f"  body: {r.text[:2000]}", flush=True)
         r.raise_for_status()
         return r.json()
-    raise RuntimeError(f"Close API failed after 3 attempts: {path}")
+    raise RuntimeError(f"Close API failed after {max_attempts} attempts: {path}")
 
 
 def close_paginate_skip(path, params=None):
