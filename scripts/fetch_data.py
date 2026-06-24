@@ -716,16 +716,17 @@ def fetch_scraper_meetings_per_day(setter_value, fetch_start, fetch_end_exclusiv
         f'custom.{FIELD_FIRST_CALL_BOOKED}<="{end_d}"'
     )
     fields = (
-        "id,opportunities,"
+        "id,display_name,opportunities,"
         f"custom.{FIELD_FIRST_CALL_BOOKED},"
         f"custom.{FIELD_FIRST_CALL_SHOWUP},"
         f"custom.{FIELD_FUNNEL_NAME}"
     )
 
-    booked_pd  = defaultdict(int)
-    shown_pd   = defaultdict(int)
-    closed_pd  = defaultdict(int)
-    revenue_pd = defaultdict(float)   # $ from won opps on closed leads, in dollars
+    booked_pd       = defaultdict(int)
+    shown_pd        = defaultdict(int)
+    closed_pd       = defaultdict(int)
+    revenue_pd      = defaultdict(float)   # $ from won opps on closed leads, in dollars
+    closed_leads_pd = defaultdict(list)    # day -> [{lead_id, lead_name, value}, ...]
 
     for ld in close_paginate_skip("/lead/", {"query": q, "_fields": fields}):
         if get_custom(ld, FIELD_FUNNEL_NAME) in EXCLUDED_FUNNELS:
@@ -746,15 +747,23 @@ def fetch_scraper_meetings_per_day(setter_value, fetch_start, fetch_end_exclusiv
             closed_pd[day] += 1
             # Close stores opportunity value in cents — convert to dollars.
             # Sum all won opps on the lead (rare to have >1, but be safe).
-            revenue_pd[day] += sum(
+            lead_value = sum(
                 int((opp or {}).get("value") or 0) for opp in won_opps
             ) / 100.0
+            revenue_pd[day] += lead_value
+            closed_leads_pd[day].append({
+                "lead_id":   ld.get("id"),
+                "lead_name": ld.get("display_name") or "(unnamed lead)",
+                "value":     round(lead_value, 2),
+                "won_count": len(won_opps),
+            })
 
     return {
         "meetings_booked":         dict(booked_pd),
         "meetings_shown":          dict(shown_pd),
         "meetings_closed":         dict(closed_pd),
         "meetings_closed_revenue": dict(revenue_pd),
+        "meetings_closed_leads":   dict(closed_leads_pd),
     }
 
 
@@ -776,6 +785,19 @@ def aggregate_scraper_for_period(per_day, start_pt, end_exclusive_pt):
     oc = _sum_in_range(per_day.get("outbound_calls"),  s, e)
     oe = _sum_in_range(per_day.get("outbound_emails"), s, e)
     os = _sum_in_range(per_day.get("outbound_sms"),    s, e)
+
+    # Flatten closed_leads from in-range days into one list, sorted by value desc
+    closed_leads = []
+    for day_str, leads in (per_day.get("meetings_closed_leads") or {}).items():
+        try:
+            d = datetime.strptime(day_str, "%Y-%m-%d").date()
+        except ValueError:
+            continue
+        if s <= d < e:
+            for ld in (leads or []):
+                closed_leads.append({**ld, "day": day_str})
+    closed_leads.sort(key=lambda r: r.get("value") or 0, reverse=True)
+
     return {
         "activities_total": oc + oe + os,
         "activities_breakdown": {
@@ -787,6 +809,7 @@ def aggregate_scraper_for_period(per_day, start_pt, end_exclusive_pt):
         "meetings_shown":          _sum_in_range(per_day.get("meetings_shown"),          s, e),
         "meetings_closed":         _sum_in_range(per_day.get("meetings_closed"),         s, e),
         "meetings_closed_revenue": _sum_in_range(per_day.get("meetings_closed_revenue"), s, e),
+        "meetings_closed_leads":   closed_leads,
     }
 
 
@@ -946,6 +969,7 @@ def _build_scraper_view(scraper_meta, scraper_per_day_by_uid, start_pt, end_excl
             "meetings_shown_mtd":            agg["meetings_shown"],
             "meetings_closed_ever":          agg["meetings_closed"],
             "meetings_closed_revenue_ever":  round(agg["meetings_closed_revenue"], 2),
+            "meetings_closed_leads":         agg["meetings_closed_leads"],
         })
     out.sort(key=lambda x: x["meetings_booked_mtd"], reverse=True)
     return out
@@ -1079,6 +1103,7 @@ def main():
             "meetings_shown":           w.get("meetings_shown_mtd", 0),
             "meetings_closed":          w.get("meetings_closed_ever", 0),
             "meetings_closed_revenue":  w.get("meetings_closed_revenue_ever", 0),
+            "meetings_closed_leads":    w.get("meetings_closed_leads", []),
         }
         scrapers_combined.append({**s, "wtd": wtd_block})
 
