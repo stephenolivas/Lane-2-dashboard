@@ -722,9 +722,10 @@ def fetch_scraper_meetings_per_day(setter_value, fetch_start, fetch_end_exclusiv
         f"custom.{FIELD_FUNNEL_NAME}"
     )
 
-    booked_pd = defaultdict(int)
-    shown_pd  = defaultdict(int)
-    closed_pd = defaultdict(int)
+    booked_pd  = defaultdict(int)
+    shown_pd   = defaultdict(int)
+    closed_pd  = defaultdict(int)
+    revenue_pd = defaultdict(float)   # $ from won opps on closed leads, in dollars
 
     for ld in close_paginate_skip("/lead/", {"query": q, "_fields": fields}):
         if get_custom(ld, FIELD_FUNNEL_NAME) in EXCLUDED_FUNNELS:
@@ -740,13 +741,20 @@ def fetch_scraper_meetings_per_day(setter_value, fetch_start, fetch_end_exclusiv
             shown_pd[day] += 1
 
         opps = ld.get("opportunities") or []
-        if any((opp or {}).get("status_type") == "won" for opp in opps):
+        won_opps = [opp for opp in opps if (opp or {}).get("status_type") == "won"]
+        if won_opps:
             closed_pd[day] += 1
+            # Close stores opportunity value in cents — convert to dollars.
+            # Sum all won opps on the lead (rare to have >1, but be safe).
+            revenue_pd[day] += sum(
+                int((opp or {}).get("value") or 0) for opp in won_opps
+            ) / 100.0
 
     return {
-        "meetings_booked": dict(booked_pd),
-        "meetings_shown":  dict(shown_pd),
-        "meetings_closed": dict(closed_pd),
+        "meetings_booked":         dict(booked_pd),
+        "meetings_shown":          dict(shown_pd),
+        "meetings_closed":         dict(closed_pd),
+        "meetings_closed_revenue": dict(revenue_pd),
     }
 
 
@@ -775,9 +783,10 @@ def aggregate_scraper_for_period(per_day, start_pt, end_exclusive_pt):
             "outbound_emails": oe,
             "outbound_sms":    os,
         },
-        "meetings_booked": _sum_in_range(per_day.get("meetings_booked"), s, e),
-        "meetings_shown":  _sum_in_range(per_day.get("meetings_shown"),  s, e),
-        "meetings_closed": _sum_in_range(per_day.get("meetings_closed"), s, e),
+        "meetings_booked":         _sum_in_range(per_day.get("meetings_booked"),         s, e),
+        "meetings_shown":          _sum_in_range(per_day.get("meetings_shown"),          s, e),
+        "meetings_closed":         _sum_in_range(per_day.get("meetings_closed"),         s, e),
+        "meetings_closed_revenue": _sum_in_range(per_day.get("meetings_closed_revenue"), s, e),
     }
 
 
@@ -931,11 +940,12 @@ def _build_scraper_view(scraper_meta, scraper_per_day_by_uid, start_pt, end_excl
         agg = aggregate_scraper_for_period(pd, start_pt, end_exclusive_pt)
         out.append({
             **meta,
-            "activities_mtd_total":  agg["activities_total"],
-            "activities_breakdown":  agg["activities_breakdown"],
-            "meetings_booked_mtd":   agg["meetings_booked"],
-            "meetings_shown_mtd":    agg["meetings_shown"],
-            "meetings_closed_ever":  agg["meetings_closed"],
+            "activities_mtd_total":          agg["activities_total"],
+            "activities_breakdown":          agg["activities_breakdown"],
+            "meetings_booked_mtd":           agg["meetings_booked"],
+            "meetings_shown_mtd":            agg["meetings_shown"],
+            "meetings_closed_ever":          agg["meetings_closed"],
+            "meetings_closed_revenue_ever":  round(agg["meetings_closed_revenue"], 2),
         })
     out.sort(key=lambda x: x["meetings_booked_mtd"], reverse=True)
     return out
@@ -1063,11 +1073,12 @@ def main():
     for s in scrapers_mtd:
         w = by_uid_wtd_scr.get(s["user_id"], {})
         wtd_block = {
-            "activities_total":     w.get("activities_mtd_total", 0),
-            "activities_breakdown": w.get("activities_breakdown", {}),
-            "meetings_booked":      w.get("meetings_booked_mtd", 0),
-            "meetings_shown":       w.get("meetings_shown_mtd", 0),
-            "meetings_closed":      w.get("meetings_closed_ever", 0),
+            "activities_total":         w.get("activities_mtd_total", 0),
+            "activities_breakdown":     w.get("activities_breakdown", {}),
+            "meetings_booked":          w.get("meetings_booked_mtd", 0),
+            "meetings_shown":           w.get("meetings_shown_mtd", 0),
+            "meetings_closed":          w.get("meetings_closed_ever", 0),
+            "meetings_closed_revenue":  w.get("meetings_closed_revenue_ever", 0),
         }
         scrapers_combined.append({**s, "wtd": wtd_block})
 
