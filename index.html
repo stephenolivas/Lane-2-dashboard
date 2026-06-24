@@ -1224,8 +1224,8 @@ function render(rawData) {
         ? `Owned leads / handraisers / 0-comms = snapshot now · Activity & deal metrics = WTD (Mon–Fri)`
         : `Owned leads = snapshot now · Activity/deal metrics = MTD · 0-comms = ever`)
     : (weekMode
-        ? `Activities = outbound only, WTD · Meetings Booked = WTD by First Sales Call date · Closed = ever closed-won`
-        : `Activities = outbound only, MTD · Meetings Booked = MTD by First Sales Call date · Closed = ever closed-won`);
+        ? `Activities = outbound only, WTD · Meetings Booked = WTD by First Sales Call date · Closed &amp; Revenue = won in WTD (by close date)`
+        : `Activities = outbound only, MTD · Meetings Booked = MTD by First Sales Call date · Closed &amp; Revenue = won in MTD (by close date)`);
 
   // Build the picker options for the current period
   const periodPickerOptions = (() => {
