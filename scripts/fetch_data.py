@@ -72,6 +72,19 @@ SCRAPERS = [
      "setter_field_value": "Jennifer Padilla"},
 ]
 
+# Setters hold their own discovery calls (in addition to the calls they book for
+# closers). Each entry pairs a Close user_id with the title prefix used by the
+# Calendly→Close integration; we match meeting activities whose title startswith
+# the prefix and whose user_id matches.
+#
+# For "Set" (meetings_set), we reuse the scraper section's meetings_booked count
+# for this user — the same person is appearing in both tables.
+SETTERS = [
+    {"name": "William Nowak",
+     "user_id": "user_ZNKG1S9eI71qxhSozBK4jskTVtJqXzfNCPWqmADRR9F",
+     "discovery_title_prefix": "Vendingpreneurs Quick Discovery"},
+]
+
 # Close custom field IDs (verified from sibling dashboards)
 FIELD_LEAD_OWNER         = "cf_gOfS9pFwext58oberEegLyix8hZzeHrxhCZOVh3P3rd"
 FIELD_HANDRAISER         = "cf_Q1hRv8It46xsAEmpv4PRKdI1y0sPJnrnQrgRbIlF8uL"
@@ -908,6 +921,121 @@ def aggregate_scraper_for_period(per_day, start_pt, end_exclusive_pt):
     }
 
 
+# ─ Setter discovery meetings ─────────────────────────────────────────────────
+
+def _meeting_shown(meeting, host_user_id):
+    """A discovery meeting is "shown" iff:
+       - the meeting status is NOT canceled, AND
+       - the host's attendee entry is NOT "declined"
+    A no-show in this workflow surfaces as either (a) William declining the
+    invite from his calendar (the Calendly→Close integration syncs that back
+    as a declined attendee status), or (b) the meeting being canceled outright.
+    """
+    status = (meeting.get("status") or "").lower()
+    if status in ("canceled", "cancelled", "no-show"):
+        return False
+    for att in (meeting.get("attendees") or []):
+        # Match by user_id (internal attendee) — anonymous external attendees
+        # don't have user_id populated.
+        if att.get("user_id") == host_user_id:
+            if (att.get("attendance_status") or "").lower() == "declined":
+                return False
+            break
+    return True
+
+
+def fetch_setter_discovery_per_day(setter, fetch_start, fetch_end_exclusive):
+    """Per-day buckets of discovery meetings this setter hosts.
+
+    A "discovery meeting" = an /activity/meeting/ activity where:
+      - user_id == setter's user_id (this person hosts the call), AND
+      - title.startswith(setter['discovery_title_prefix']) (e.g. "Vendingpreneurs Quick Discovery")
+
+    Day = the meeting's `starts_at` (when it happened), bucketed in PT.
+    `discovery_shown` is the subset that was not declined/canceled.
+
+    Returns:
+      {
+        "discovery_held":  {day: int},
+        "discovery_shown": {day: int},
+      }
+    """
+    uid = setter["user_id"]
+    prefix = setter["discovery_title_prefix"]
+    since_iso = fetch_start.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    end_iso   = fetch_end_exclusive.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    held_pd  = defaultdict(int)
+    shown_pd = defaultdict(int)
+    seen = 0
+
+    # We extend the filter to date_created__gte=fetch_start because Close's
+    # /activity/meeting/ filters on date_created, not starts_at. Most discovery
+    # meetings are created shortly before they happen so this is fine — we
+    # still bucket by starts_at PT, the date the meeting actually occurred.
+    for mtg in close_paginate_skip("/activity/meeting/", {
+        "user_id":           uid,
+        "date_created__gte": since_iso,
+    }):
+        seen += 1
+        title = (mtg.get("title") or "")
+        if not title.startswith(prefix):
+            continue
+
+        starts_at = mtg.get("starts_at")
+        if not starts_at:
+            continue
+        try:
+            dt = datetime.fromisoformat(starts_at.replace("Z", "+00:00"))
+        except ValueError:
+            continue
+        day_pt = dt.astimezone(TIMEZONE).date()
+
+        # starts_at could be earlier than fetch_start (rare — old meetings
+        # backfilled into the fetch window) or after fetch_end_exclusive
+        # (upcoming meetings). Either is fine — we keep them, and the
+        # period aggregation slices by day at output time.
+        if day_pt < fetch_start.date() or day_pt >= fetch_end_exclusive.date():
+            # Outside the fetch window we care about — skip
+            continue
+
+        day = day_pt.isoformat()
+        held_pd[day]  += 1
+        if _meeting_shown(mtg, uid):
+            shown_pd[day] += 1
+
+    print(f"  setter {setter['name']}: {sum(held_pd.values())} held, "
+          f"{sum(shown_pd.values())} shown (scanned {seen} meetings)",
+          flush=True)
+
+    return {
+        "discovery_held":  dict(held_pd),
+        "discovery_shown": dict(shown_pd),
+    }
+
+
+def aggregate_setter_for_period(per_day, start_pt, end_exclusive_pt,
+                                  scraper_per_day=None):
+    """Aggregate a setter's per-day data into period totals.
+
+    `scraper_per_day` lets us pull "Discovery Set" from the matching scraper's
+    meetings_booked bucket — same setter, same booking event, no second API call.
+    """
+    s, e = start_pt.date(), end_exclusive_pt.date()
+    held  = _sum_in_range(per_day.get("discovery_held"),  s, e)
+    shown = _sum_in_range(per_day.get("discovery_shown"), s, e)
+    set_count = 0
+    if scraper_per_day:
+        set_count = _sum_in_range(scraper_per_day.get("meetings_booked"), s, e)
+    show_pct = round(100.0 * shown / held, 1) if held else 0.0
+    return {
+        "discovery_held":  held,
+        "discovery_shown": shown,
+        "discovery_set":   set_count,
+        "show_pct":        show_pct,
+    }
+
+
 # ============================================================================
 # MAIN
 # ============================================================================
@@ -1212,6 +1340,45 @@ def main():
         }
         scrapers_combined.append({**s, "wtd": wtd_block})
 
+    # ─ Setter discovery meetings ──────────────────────────────────────────
+    # Same person may also hold their own discovery calls. We fetch meeting
+    # activities once (per setter) over the fetch_start range and bucket per-day,
+    # then aggregate for MTD + WTD + each backfill week from the same per-day data.
+    print("\n[setters] fetching discovery meetings", flush=True)
+    setter_per_day_by_uid = {}
+    setter_meta = []
+    for setter_cfg in SETTERS:
+        per_day = fetch_setter_discovery_per_day(setter_cfg, fetch_start, month_end)
+        setter_per_day_by_uid[setter_cfg["user_id"]] = per_day
+        setter_meta.append({"user_id": setter_cfg["user_id"], "name": setter_cfg["name"]})
+
+    def _build_setters_view(start_pt, end_pt):
+        out = []
+        for meta in setter_meta:
+            uid = meta["user_id"]
+            agg = aggregate_setter_for_period(
+                setter_per_day_by_uid.get(uid, {}),
+                start_pt, end_pt,
+                scraper_per_day_by_uid.get(uid),
+            )
+            out.append({**meta, **agg})
+        out.sort(key=lambda x: x["discovery_held"], reverse=True)
+        return out
+
+    setters_mtd = _build_setters_view(month_start, month_end)
+    setters_wtd = _build_setters_view(week_start, week_end_excl)
+    by_uid_setters_wtd = {x["user_id"]: x for x in setters_wtd}
+    setters_combined = []
+    for sm in setters_mtd:
+        w = by_uid_setters_wtd.get(sm["user_id"], {})
+        wtd_block = {
+            "discovery_held":  w.get("discovery_held",  0),
+            "discovery_shown": w.get("discovery_shown", 0),
+            "discovery_set":   w.get("discovery_set",   0),
+            "show_pct":        w.get("show_pct",        0.0),
+        }
+        setters_combined.append({**sm, "wtd": wtd_block})
+
     # ─ Calendar slicing ───────────────────────────────────────────────────
     full_month_calendar = {
         d.isoformat(): cal_counts_all.get(d.isoformat(), 0)
@@ -1283,6 +1450,7 @@ def main():
         # Reps + scrapers (top-level MTD, wtd sub-block)
         "reps": reps_combined,
         "scrapers": scrapers_combined,
+        "setters": setters_combined,
     }
 
     repo_root = Path(__file__).resolve().parent.parent
@@ -1316,11 +1484,21 @@ def main():
             scraper_meta, scraper_per_day_by_uid, ws, we_excl
         )
 
-        # Reps & scrapers — period totals at top level (this whole file IS the period)
+        # Reps & scrapers & setters — period totals at top level (this whole file IS the period)
         rep_view     = _build_rep_view(rep_meta, rep_per_day_by_uid,
                                         ws, we_excl, biz_days)
         scraper_view = _build_scraper_view(scraper_meta, scraper_per_day_by_uid,
                                             ws, we_excl)
+        setter_view  = []
+        for sm in setter_meta:
+            uid = sm["user_id"]
+            agg = aggregate_setter_for_period(
+                setter_per_day_by_uid.get(uid, {}),
+                ws, we_excl,
+                scraper_per_day_by_uid.get(uid),
+            )
+            setter_view.append({**sm, **agg})
+        setter_view.sort(key=lambda x: x["discovery_held"], reverse=True)
 
         week_archive = {
             "kind": "week",
@@ -1343,6 +1521,7 @@ def main():
             "scraper_daily_breakdowns": scr_daily_bd,
             "reps": rep_view,
             "scrapers": scraper_view,
+            "setters": setter_view,
         }
         path = archives / f"week_{label}.json"
         path.write_text(json.dumps(week_archive, indent=2))
