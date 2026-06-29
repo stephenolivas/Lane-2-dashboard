@@ -817,6 +817,16 @@ function adaptView(raw, period) {
         meetings_closed_leads:         w.meetings_closed_leads     ?? [],
       };
     }),
+    setters: (raw.setters || []).map(s => {
+      const w = s.wtd || {};
+      return {
+        ...s,
+        discovery_held:  w.discovery_held  ?? 0,
+        discovery_shown: w.discovery_shown ?? 0,
+        discovery_set:   w.discovery_set   ?? 0,
+        show_pct:        w.show_pct        ?? 0,
+      };
+    }),
   };
 }
 
@@ -1179,6 +1189,66 @@ function renderScrapers(data) {
   `;
 }
 
+function renderSetters(data) {
+  const setters = data.setters || [];
+  if (!setters.length) {
+    return '<p style="padding:20px;color:var(--text-muted)">No setters configured.</p>';
+  }
+  const weekMode = isWeekView(data);
+  const periodNoun = weekMode ? 'WTD' : 'MTD';
+
+  let totHeld = 0, totShown = 0, totSet = 0;
+  for (const s of setters) {
+    totHeld  += s.discovery_held  || 0;
+    totShown += s.discovery_shown || 0;
+    totSet   += s.discovery_set   || 0;
+  }
+  const teamShowPct = totHeld ? (100 * totShown / totHeld).toFixed(1) + '%' : '—';
+
+  const rows = setters.map(s => {
+    const showPct = (s.discovery_held > 0)
+      ? `${(s.show_pct ?? 0).toFixed(1)}%`
+      : '—';
+    return `
+      <tr>
+        <td><div class="rep-name">${s.name}</div></td>
+        <td class="num">${fmtInt(s.discovery_held)}</td>
+        <td class="num">${fmtInt(s.discovery_shown)}</td>
+        <td class="num">${showPct}</td>
+        <td class="num">${fmtInt(s.discovery_set)}</td>
+      </tr>
+    `;
+  }).join('');
+
+  return `
+    <div class="reps-table-wrap">
+      <table class="reps">
+        <thead>
+          <tr>
+            <th>Setter</th>
+            <th class="num">Discovery Meetings Held (${periodNoun})</th>
+            <th class="num">Discovery Meetings Shown</th>
+            <th class="num">Show %</th>
+            <th class="num">Discovery Meetings Set</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${rows}
+          ${setters.length > 1 ? `
+            <tr class="totals-row">
+              <td>Team Total</td>
+              <td class="num">${fmtInt(totHeld)}</td>
+              <td class="num">${fmtInt(totShown)}</td>
+              <td class="num">${teamShowPct}</td>
+              <td class="num">${fmtInt(totSet)}</td>
+            </tr>
+          ` : ''}
+        </tbody>
+      </table>
+    </div>
+  `;
+}
+
 function render(rawData) {
   // RAW_DATA is the unmodified payload (lets us toggle period without re-fetching).
   // DATA is the period-adapted view that the rest of render() consumes.
@@ -1202,7 +1272,7 @@ function render(rawData) {
     kpi2 = { label: 'Owned Leads (Now)',         value: totalOwned    };
     kpi3 = { label: 'Leads w/ 0 Comms',          value: totalZero     };
     kpi4 = { label: `Calls Booked ${periodNoun}`, value: totalBooked  };
-  } else {
+  } else if (view === 'scrapers') {
     const totalBooked = (data.scrapers || []).reduce((s, r) => s + (r.meetings_booked_mtd || 0), 0);
     const totalShown  = (data.scrapers || []).reduce((s, r) => s + (r.meetings_shown_mtd  || 0), 0);
     const totalClosed = (data.scrapers || []).reduce((s, r) => s + (r.meetings_closed_ever || 0), 0);
@@ -1211,21 +1281,39 @@ function render(rawData) {
     kpi2 = { label: 'Meetings Shown',                value: totalShown };
     kpi3 = { label: 'Meetings Closed',               value: totalClosed };
     kpi4 = { label: `Activities ${periodNoun}`,      value: totalActs };
+  } else {
+    // setters view
+    const totalHeld  = (data.setters || []).reduce((s, r) => s + (r.discovery_held  || 0), 0);
+    const totalShown = (data.setters || []).reduce((s, r) => s + (r.discovery_shown || 0), 0);
+    const totalSet   = (data.setters || []).reduce((s, r) => s + (r.discovery_set   || 0), 0);
+    const teamShowPct = totalHeld ? Math.round(100 * totalShown / totalHeld) + '%' : '—';
+    kpi1 = { label: `Discovery Held ${periodNoun}`,  value: totalHeld };
+    kpi2 = { label: 'Discovery Shown',               value: totalShown };
+    kpi3 = { label: 'Show %',                        value: teamShowPct };
+    kpi4 = { label: `Discovery Set ${periodNoun}`,   value: totalSet };
   }
 
   const calendarHeading = view === 'reps'
     ? `Lead assignments — ${periodLabel}`
-    : `Meetings booked — ${periodLabel}`;
+    : (view === 'scrapers'
+        ? `Meetings booked — ${periodLabel}`
+        : `Meetings booked by setters — ${periodLabel}`);
   const calendarHelper = view === 'reps'
     ? 'Click any day for a per-rep breakdown. Hover for handraiser mix.'
-    : 'Click any day for a per-scraper breakdown. Hover for the scraper split.';
+    : (view === 'scrapers'
+        ? 'Click any day for a per-scraper breakdown. Hover for the scraper split.'
+        : 'Calendar shows meetings booked (same as Scraper view).');
   const detailsHelper = view === 'reps'
     ? (weekMode
         ? `Owned leads / handraisers / 0-comms = snapshot now · Activity & deal metrics = WTD (Mon–Fri)`
         : `Owned leads = snapshot now · Activity/deal metrics = MTD · 0-comms = ever`)
-    : (weekMode
-        ? `Activities = outbound only, WTD · Meetings Booked = WTD by First Sales Call date · Closed &amp; Revenue = won in WTD (by close date)`
-        : `Activities = outbound only, MTD · Meetings Booked = MTD by First Sales Call date · Closed &amp; Revenue = won in MTD (by close date)`);
+    : (view === 'scrapers'
+        ? (weekMode
+            ? `Activities = outbound only, WTD · Meetings Booked = WTD by First Sales Call date · Closed &amp; Revenue = won in WTD (by close date)`
+            : `Activities = outbound only, MTD · Meetings Booked = MTD by First Sales Call date · Closed &amp; Revenue = won in MTD (by close date)`)
+        : (weekMode
+            ? `Held = "Vendingpreneurs Quick Discovery" meetings hosted in WTD · Shown = held minus cancellations &amp; declines · Set = setter's Meetings Booked (same as scraper view)`
+            : `Held = "Vendingpreneurs Quick Discovery" meetings hosted in MTD · Shown = held minus cancellations &amp; declines · Set = setter's Meetings Booked (same as scraper view)`));
 
   // Build the picker options for the current period
   const periodPickerOptions = (() => {
@@ -1283,19 +1371,19 @@ function render(rawData) {
     <div class="kpi-strip">
       <div class="kpi">
         <div class="label">${kpi1.label}</div>
-        <div class="value num">${fmtInt(kpi1.value)}</div>
+        <div class="value num">${typeof kpi1.value === 'number' ? fmtInt(kpi1.value) : kpi1.value}</div>
       </div>
       <div class="kpi">
         <div class="label">${kpi2.label}</div>
-        <div class="value num">${fmtInt(kpi2.value)}</div>
+        <div class="value num">${typeof kpi2.value === 'number' ? fmtInt(kpi2.value) : kpi2.value}</div>
       </div>
       <div class="kpi">
         <div class="label">${kpi3.label}</div>
-        <div class="value num">${fmtInt(kpi3.value)}</div>
+        <div class="value num">${typeof kpi3.value === 'number' ? fmtInt(kpi3.value) : kpi3.value}</div>
       </div>
       <div class="kpi">
         <div class="label">${kpi4.label}</div>
-        <div class="value num">${fmtInt(kpi4.value)}</div>
+        <div class="value num">${typeof kpi4.value === 'number' ? fmtInt(kpi4.value) : kpi4.value}</div>
       </div>
     </div>
 
@@ -1304,21 +1392,22 @@ function render(rawData) {
         <h2>${calendarHeading}</h2>
         <span class="helper">${calendarHelper}</span>
       </div>
-      ${renderCalendar(data, view)}
+      ${renderCalendar(data, view === 'setters' ? 'scrapers' : view)}
     </section>
 
     <section class="section">
       <div class="section-head">
         <div class="section-head-left">
-          <h2 style="margin:0">${view === 'reps' ? 'Rep details' : 'Scraper details'}</h2>
-          <div class="view-toggle" role="tablist" aria-label="Switch between rep and scraper views">
-            <button onclick="switchView('reps')"     class="${view === 'reps' ? 'active' : ''}"     role="tab" aria-selected="${view === 'reps'}">Rep details</button>
+          <h2 style="margin:0">${view === 'reps' ? 'Rep details' : (view === 'scrapers' ? 'Scraper details' : 'Setter details')}</h2>
+          <div class="view-toggle" role="tablist" aria-label="Switch between rep, scraper, and setter views">
+            <button onclick="switchView('reps')"     class="${view === 'reps'     ? 'active' : ''}" role="tab" aria-selected="${view === 'reps'}">Rep details</button>
             <button onclick="switchView('scrapers')" class="${view === 'scrapers' ? 'active' : ''}" role="tab" aria-selected="${view === 'scrapers'}">Scraper details</button>
+            <button onclick="switchView('setters')"  class="${view === 'setters'  ? 'active' : ''}" role="tab" aria-selected="${view === 'setters'}">Setter details</button>
           </div>
         </div>
         <span class="helper">${detailsHelper}</span>
       </div>
-      ${view === 'reps' ? renderReps(data) : renderScrapers(data)}
+      ${view === 'reps' ? renderReps(data) : (view === 'scrapers' ? renderScrapers(data) : renderSetters(data))}
     </section>
 
     <footer>
@@ -1436,7 +1525,7 @@ function fmtDayHeading(dayKey) {
 
 function openSidePanel(dayKey) {
   if (!DATA) return;
-  if (CURRENT_VIEW === 'scrapers') {
+  if (CURRENT_VIEW === 'scrapers' || CURRENT_VIEW === 'setters') {
     openSidePanelScrapers(dayKey);
   } else {
     openSidePanelReps(dayKey);
