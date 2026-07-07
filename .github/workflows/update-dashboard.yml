@@ -2,6 +2,11 @@ name: Update Lane 2 Dashboard
 
 on:
   workflow_dispatch:
+    inputs:
+      backfill_month:
+        description: 'Optional YYYY-MM to backfill (e.g. 2026-06). Leave blank for normal run.'
+        required: false
+        default: ''
   # Backup cron in case cron-job.org is down — every 30 min, weekdays only.
   schedule:
     - cron: '*/30 13-23 * * 1-5'  # ~6 AM – 4 PM PT
@@ -13,7 +18,9 @@ concurrency:
 jobs:
   update:
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    # Bumped from 25 → 40 to accommodate backfill runs which pull a full
+    # month of closed-won opps + per-lead VQD checks.
+    timeout-minutes: 40
     permissions:
       contents: write
     env:
@@ -36,7 +43,10 @@ jobs:
 
       - name: Run fetcher
         env:
-          CLOSE_API_KEY: ${{ secrets.CLOSE_API_KEY }}
+          CLOSE_API_KEY:  ${{ secrets.CLOSE_API_KEY }}
+          # Empty on scheduled / cron-job.org runs → normal mode.
+          # Set from the "Run workflow" dialog → backfill mode for that month.
+          BACKFILL_MONTH: ${{ inputs.backfill_month }}
         # -u forces unbuffered output as a belt-and-suspenders alongside PYTHONUNBUFFERED.
         run: python -u scripts/fetch_data.py
 
@@ -46,7 +56,11 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add data.json archives/
           if ! git diff --cached --quiet; then
-            git commit -m "auto: refresh lane2 data $(date -u +'%Y-%m-%d %H:%M UTC')"
+            if [ -n "${{ inputs.backfill_month }}" ]; then
+              git commit -m "backfill: ${{ inputs.backfill_month }} — rewrite monthly + weekly archives"
+            else
+              git commit -m "auto: refresh lane2 data $(date -u +'%Y-%m-%d %H:%M UTC')"
+            fi
             git push
           else
             echo "No changes to commit."
