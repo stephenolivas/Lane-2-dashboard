@@ -1371,7 +1371,34 @@ def _update_archives_index(archives_dir):
 
 def main():
     started = time.time()
-    now = now_pt()
+
+    # ─ Backfill mode ──────────────────────────────────────────────────────
+    # If the workflow was dispatched with BACKFILL_MONTH=YYYY-MM, pretend `now`
+    # is the last day of that month so the whole month falls into the fetch
+    # range. We rewrite that month's archives (monthly + every Mon-Fri weekly
+    # archive in it) but skip data.json so the live dashboard stays current.
+    backfill_month_env = os.environ.get("BACKFILL_MONTH", "").strip()
+    if backfill_month_env:
+        try:
+            year, month = map(int, backfill_month_env.split("-"))
+            assert 1 <= month <= 12
+        except (ValueError, AssertionError):
+            raise ValueError(
+                f"BACKFILL_MONTH must be YYYY-MM (got {backfill_month_env!r})"
+            )
+        first_of_next = (datetime(year + 1, 1, 1, tzinfo=TIMEZONE)
+                         if month == 12
+                         else datetime(year, month + 1, 1, tzinfo=TIMEZONE))
+        now = (first_of_next - timedelta(days=1)).replace(
+            hour=12, minute=0, second=0, microsecond=0
+        )
+        print(f"⚙ BACKFILL MODE — target month: {backfill_month_env}", flush=True)
+        print(f"  effective now = {now.isoformat()}", flush=True)
+        print(f"  will rewrite archives/data_{backfill_month_env}.json + every "
+              f"Mon-Fri week whose Monday is in this month", flush=True)
+        print(f"  live data.json will NOT be touched\n", flush=True)
+    else:
+        now = now_pt()
 
     month_start, month_end, month_label = month_bounds(now)
     week_start, week_end_excl, week_iso = week_bounds_pt(now)
@@ -1598,8 +1625,11 @@ def main():
     }
 
     repo_root = Path(__file__).resolve().parent.parent
-    (repo_root / "data.json").write_text(json.dumps(output, indent=2))
-    print(f"\nwrote {repo_root / 'data.json'}", flush=True)
+    if not backfill_month_env:
+        (repo_root / "data.json").write_text(json.dumps(output, indent=2))
+        print(f"\nwrote {repo_root / 'data.json'}", flush=True)
+    else:
+        print(f"\n(backfill mode — data.json left untouched)", flush=True)
 
     archives = repo_root / "archives"
     archives.mkdir(exist_ok=True)
@@ -1672,12 +1702,26 @@ def main():
         print(f"wrote {path}", flush=True)
         return path
 
-    _write_week_archive(week_start, week_end_excl, week_iso, biz_days_wtd)
-    for bw in backfill_weeks:
-        if bw["start"] < fetch_start:
-            print(f"  skip backfill {bw['label']} (outside fetch range)", flush=True)
-            continue
-        _write_week_archive(bw["start"], bw["end_exclusive"], bw["label"], 5)
+    if backfill_month_env:
+        # Rewrite every Mon-Fri week whose Monday falls within the target month
+        d = month_start
+        weeks_written = 0
+        while d < month_end:
+            if d.weekday() == 0:   # Monday
+                _write_week_archive(
+                    d, d + timedelta(days=5), d.strftime("%Y-%m-%d"), 5
+                )
+                weeks_written += 1
+            d += timedelta(days=1)
+        print(f"backfill: rewrote {weeks_written} weekly archives for {backfill_month_env}",
+              flush=True)
+    else:
+        _write_week_archive(week_start, week_end_excl, week_iso, biz_days_wtd)
+        for bw in backfill_weeks:
+            if bw["start"] < fetch_start:
+                print(f"  skip backfill {bw['label']} (outside fetch range)", flush=True)
+                continue
+            _write_week_archive(bw["start"], bw["end_exclusive"], bw["label"], 5)
 
     # ─ Update the navigation index ────────────────────────────────────────
     _update_archives_index(archives)
