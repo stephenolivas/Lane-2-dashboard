@@ -782,12 +782,19 @@ def _lead_has_vqd_by(lead_id, setter_uid, title_prefix):
     starts with `title_prefix`? Used to classify a closed-won lead as Inbound
     (setter held the discovery) — checks the lead's full history, not just the
     fetch window, because a VQD may have happened months before the deal closed.
+
+    Robustness: we query by lead_id ONLY (not combined with user_id) and filter
+    the setter and title client-side. Close's `/activity/meeting/` REST endpoint
+    doesn't reliably intersect the two server-side filters — it can silently
+    drop matches when both are supplied together. Client-side filtering also
+    means we don't need `_fields`, so the full meeting object is available if
+    we ever need more attributes.
     """
     for mtg in close_paginate_skip("/activity/meeting/", {
         "lead_id": lead_id,
-        "user_id": setter_uid,
-        "_fields": "id,title",
     }):
+        if mtg.get("user_id") != setter_uid:
+            continue
         if (mtg.get("title") or "").startswith(title_prefix):
             return True
     return False
@@ -860,6 +867,8 @@ def fetch_closes_per_day(scrapers, setters, fetch_start, fetch_end_exclusive):
     scraper_matched = 0
     setter_inbound  = 0
     setter_outbound = 0
+    vqd_hits_by_uid = defaultdict(int)   # per-setter counter of leads where has_vqd=True
+    vqd_miss_by_uid = defaultdict(int)   # per-setter counter of leads where has_vqd=False
 
     for lead_id, opps in leads_to_opps.items():
         try:
@@ -913,6 +922,10 @@ def fetch_closes_per_day(scrapers, setters, fetch_start, fetch_end_exclusive):
             scraper_handle = setter.get("scraper_setter_field_value")
 
             has_vqd = _lead_has_vqd_by(lead_id, setter_uid, prefix)
+            if has_vqd:
+                vqd_hits_by_uid[setter_uid] += 1
+            else:
+                vqd_miss_by_uid[setter_uid] += 1
 
             if has_vqd:
                 bucket = "inbound"
@@ -943,6 +956,13 @@ def fetch_closes_per_day(scrapers, setters, fetch_start, fetch_end_exclusive):
     if setters:
         print(f"  setter credit:  {setter_inbound} inbound + {setter_outbound} outbound (rows)",
               flush=True)
+        for s in setters:
+            uid = s["user_id"]
+            in_rev  = sum(setter_out[uid]["inbound_revenue"].values())
+            out_rev = sum(setter_out[uid]["outbound_revenue"].values())
+            print(f"    {s['name']}: VQD hits={vqd_hits_by_uid[uid]} misses={vqd_miss_by_uid[uid]}"
+                  f" · inbound=${in_rev:,.0f} · outbound=${out_rev:,.0f}",
+                  flush=True)
 
     scraper_result = {
         uid: {k: dict(v) for k, v in data.items()}
