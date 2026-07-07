@@ -439,6 +439,14 @@
     padding: 12px 18px 16px;
     border-top: 1px dashed var(--border);
   }
+  .rev-detail-header {
+    font-size: 11.5px;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    margin-bottom: 8px;
+  }
   .rev-detail-list {
     list-style: none;
     margin: 0;
@@ -821,10 +829,14 @@ function adaptView(raw, period) {
       const w = s.wtd || {};
       return {
         ...s,
-        discovery_held:  w.discovery_held  ?? 0,
-        discovery_shown: w.discovery_shown ?? 0,
-        discovery_set:   w.discovery_set   ?? 0,
-        show_pct:        w.show_pct        ?? 0,
+        discovery_held:   w.discovery_held   ?? 0,
+        discovery_shown:  w.discovery_shown  ?? 0,
+        discovery_set:    w.discovery_set    ?? 0,
+        show_pct:         w.show_pct         ?? 0,
+        inbound_revenue:  w.inbound_revenue  ?? 0,
+        outbound_revenue: w.outbound_revenue ?? 0,
+        inbound_leads:    w.inbound_leads    ?? [],
+        outbound_leads:   w.outbound_leads   ?? [],
       };
     }),
   };
@@ -1197,11 +1209,35 @@ function renderSetters(data) {
   const weekMode = isWeekView(data);
   const periodNoun = weekMode ? 'WTD' : 'MTD';
 
-  let totHeld = 0, totShown = 0, totSet = 0;
+  const fmtMoney = (n) => '$' + Math.round(Number(n) || 0).toLocaleString();
+
+  // Reuse the closed-leads list rendering from the scraper section.
+  const renderLeadList = (leads, emptyMsg) => {
+    if (!leads || !leads.length) {
+      return `<div class="rev-detail-empty">${emptyMsg}</div>`;
+    }
+    const items = leads.map(l => {
+      const url  = `https://app.close.com/lead/${encodeURIComponent(l.lead_id || '')}/`;
+      const day  = l.day ? `<span class="rev-detail-day">${l.day}</span>` : '';
+      const multi = (l.won_count && l.won_count > 1)
+        ? `<span class="rev-detail-multi">${l.won_count} deals</span>` : '';
+      return `<li>
+        <a href="${url}" target="_blank" rel="noopener">${l.lead_name || '(unnamed)'}</a>
+        ${multi}
+        ${day}
+        <span class="rev-detail-amount">${fmtMoney(l.value)}</span>
+      </li>`;
+    }).join('');
+    return `<ul class="rev-detail-list">${items}</ul>`;
+  };
+
+  let totHeld = 0, totShown = 0, totSet = 0, totInbound = 0, totOutbound = 0;
   for (const s of setters) {
-    totHeld  += s.discovery_held  || 0;
-    totShown += s.discovery_shown || 0;
-    totSet   += s.discovery_set   || 0;
+    totHeld     += s.discovery_held    || 0;
+    totShown    += s.discovery_shown   || 0;
+    totSet      += s.discovery_set     || 0;
+    totInbound  += s.inbound_revenue   || 0;
+    totOutbound += s.outbound_revenue  || 0;
   }
   const teamShowPct = totHeld ? (100 * totShown / totHeld).toFixed(1) + '%' : '—';
 
@@ -1209,6 +1245,26 @@ function renderSetters(data) {
     const showPct = (s.discovery_held > 0)
       ? `${(s.show_pct ?? 0).toFixed(1)}%`
       : '—';
+    const safeUid = String(s.user_id || s.name || '').replace(/[^a-zA-Z0-9_-]/g, '_');
+
+    const inbRev  = s.inbound_revenue  || 0;
+    const outRev  = s.outbound_revenue || 0;
+    const inbHas  = (s.inbound_leads  || []).length > 0;
+    const outHas  = (s.outbound_leads || []).length > 0;
+
+    const inbCell = (inbRev > 0 && inbHas)
+      ? `<button class="rev-toggle" type="button" onclick="toggleRevDetail('setter-in-${safeUid}')" aria-expanded="false" aria-controls="rev-detail-setter-in-${safeUid}">
+           <span class="rev-amount">${fmtMoney(inbRev)}</span>
+           <span class="rev-chev" id="rev-chev-setter-in-${safeUid}">▸</span>
+         </button>`
+      : fmtMoney(inbRev);
+    const outCell = (outRev > 0 && outHas)
+      ? `<button class="rev-toggle" type="button" onclick="toggleRevDetail('setter-out-${safeUid}')" aria-expanded="false" aria-controls="rev-detail-setter-out-${safeUid}">
+           <span class="rev-amount">${fmtMoney(outRev)}</span>
+           <span class="rev-chev" id="rev-chev-setter-out-${safeUid}">▸</span>
+         </button>`
+      : fmtMoney(outRev);
+
     return `
       <tr>
         <td><div class="rep-name">${s.name}</div></td>
@@ -1216,6 +1272,20 @@ function renderSetters(data) {
         <td class="num">${fmtInt(s.discovery_shown)}</td>
         <td class="num">${showPct}</td>
         <td class="num">${fmtInt(s.discovery_set)}</td>
+        <td class="num rev-cell">${inbCell}</td>
+        <td class="num rev-cell">${outCell}</td>
+      </tr>
+      <tr class="rev-detail-row" id="rev-detail-setter-in-${safeUid}" hidden>
+        <td colspan="7">
+          <div class="rev-detail-header">Inbound closed-won leads — William hosted a Vendingpreneurs Quick Discovery</div>
+          ${renderLeadList(s.inbound_leads, 'No inbound closed-won leads in this period.')}
+        </td>
+      </tr>
+      <tr class="rev-detail-row" id="rev-detail-setter-out-${safeUid}" hidden>
+        <td colspan="7">
+          <div class="rev-detail-header">Outbound closed-won leads — William booked directly (no VQD)</div>
+          ${renderLeadList(s.outbound_leads, 'No outbound closed-won leads in this period.')}
+        </td>
       </tr>
     `;
   }).join('');
@@ -1230,6 +1300,8 @@ function renderSetters(data) {
             <th class="num">Discovery Meetings Shown</th>
             <th class="num">Show %</th>
             <th class="num">Discovery Meetings Set</th>
+            <th class="num">Inbound Revenue</th>
+            <th class="num">Outbound Revenue</th>
           </tr>
         </thead>
         <tbody>
@@ -1241,6 +1313,8 @@ function renderSetters(data) {
               <td class="num">${fmtInt(totShown)}</td>
               <td class="num">${teamShowPct}</td>
               <td class="num">${fmtInt(totSet)}</td>
+              <td class="num">${fmtMoney(totInbound)}</td>
+              <td class="num">${fmtMoney(totOutbound)}</td>
             </tr>
           ` : ''}
         </tbody>
