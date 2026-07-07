@@ -82,7 +82,11 @@ SCRAPERS = [
 SETTERS = [
     {"name": "William Nowak",
      "user_id": "user_ZNKG1S9eI71qxhSozBK4jskTVtJqXzfNCPWqmADRR9F",
-     "discovery_title_prefix": "Vendingpreneurs Quick Discovery"},
+     "discovery_title_prefix": "Vendingpreneurs Quick Discovery",
+     # If this setter also books calls (Setter Name field), we bucket their
+     # scraper-credited closes as Outbound (unless the lead also has a VQD by
+     # this setter — those are Inbound). Value must match the SCRAPERS entry.
+     "scraper_setter_field_value": "William Nowak"},
 ]
 
 # Close custom field IDs (verified from sibling dashboards)
@@ -773,25 +777,51 @@ def fetch_scraper_meetings_per_day(setter_value, fetch_start, fetch_end_exclusiv
     }
 
 
-def fetch_scraper_closes_per_day(scrapers, fetch_start, fetch_end_exclusive):
-    """Close-date attribution for scraper closes / revenue.
+def _lead_has_vqd_by(lead_id, setter_uid, title_prefix):
+    """Does this specific lead have any meeting hosted by `setter_uid` whose title
+    starts with `title_prefix`? Used to classify a closed-won lead as Inbound
+    (setter held the discovery) — checks the lead's full history, not just the
+    fetch window, because a VQD may have happened months before the deal closed.
+    """
+    for mtg in close_paginate_skip("/activity/meeting/", {
+        "lead_id": lead_id,
+        "user_id": setter_uid,
+        "_fields": "id,title",
+    }):
+        if (mtg.get("title") or "").startswith(title_prefix):
+            return True
+    return False
 
-    Queries every won opportunity org-wide whose `date_won` falls in the period,
-    then looks up each lead once to find its Setter Name + Funnel + display name.
-    Credits the matching scraper on the date the deal was won (PT), regardless of
-    when the original sales call was booked. LTF leads are excluded.
 
-    Returns:
-      {
-        scraper_user_id: {
-          "meetings_closed":         {day: count},
-          "meetings_closed_revenue": {day: dollars},
-          "meetings_closed_leads":   {day: [{lead_id, lead_name, value, won_count}, ...]},
-        },
-        ...
+def fetch_closes_per_day(scrapers, setters, fetch_start, fetch_end_exclusive):
+    """Close-date attribution for BOTH scraper closes AND setter revenue.
+
+    Single org-wide `/opportunity/` query for the period, then one lead lookup
+    each. For every configured setter we also make one per-lead meeting lookup
+    to check for a Vendingpreneurs Quick Discovery hosted by that setter.
+
+    Classification per lead per setter:
+      - Setter held VQD on this lead (any time) → Inbound
+      - Otherwise, lead's Setter Name field matches this setter's scraper handle → Outbound
+      - Otherwise, no setter credit
+
+    Returns (scraper_closes_by_uid, setter_closes_by_uid) where:
+
+      scraper_closes_by_uid[uid] = {
+        "meetings_closed":         {day: count},
+        "meetings_closed_revenue": {day: dollars},
+        "meetings_closed_leads":   {day: [{lead_id, lead_name, value, won_count}, ...]},
+      }
+
+      setter_closes_by_uid[uid] = {
+        "inbound_revenue":  {day: dollars},
+        "outbound_revenue": {day: dollars},
+        "inbound_leads":    {day: [{lead_id, lead_name, value, won_count}, ...]},
+        "outbound_leads":   {day: [...]},
       }
     """
-    setter_to_uid = {s["setter_field_value"]: s["user_id"] for s in scrapers}
+    scraper_setter_to_uid = {s["setter_field_value"]: s["user_id"] for s in scrapers}
+    setters = setters or []
 
     start_iso = fetch_start.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     end_iso   = fetch_end_exclusive.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -811,17 +841,26 @@ def fetch_scraper_closes_per_day(scrapers, fetch_start, fetch_end_exclusive):
     print(f"  closes-in-period: {opp_count} won opps across {len(leads_to_opps)} unique leads",
           flush=True)
 
-    # 2) Look up each lead once to find setter + funnel + name. Only leads whose
-    #    setter is one of our scrapers get credited.
-    out = {
+    scraper_out = {
         s["user_id"]: {
             "meetings_closed":         defaultdict(int),
             "meetings_closed_revenue": defaultdict(float),
             "meetings_closed_leads":   defaultdict(list),
         } for s in scrapers
     }
+    setter_out = {
+        s["user_id"]: {
+            "inbound_revenue":  defaultdict(float),
+            "outbound_revenue": defaultdict(float),
+            "inbound_leads":    defaultdict(list),
+            "outbound_leads":   defaultdict(list),
+        } for s in setters
+    }
 
-    matched_leads = 0
+    scraper_matched = 0
+    setter_inbound  = 0
+    setter_outbound = 0
+
     for lead_id, opps in leads_to_opps.items():
         try:
             ld = close_get(f"/lead/{lead_id}/", {
@@ -837,16 +876,10 @@ def fetch_scraper_closes_per_day(scrapers, fetch_start, fetch_end_exclusive):
         if get_custom(ld, FIELD_FUNNEL_NAME) in EXCLUDED_FUNNELS:
             continue
 
-        setter = (get_custom(ld, FIELD_SETTER_NAME) or "").strip()
-        if not setter or setter not in setter_to_uid:
-            continue
-
-        scraper_uid = setter_to_uid[setter]
+        setter_name_val = (get_custom(ld, FIELD_SETTER_NAME) or "").strip()
         lead_name = ld.get("display_name") or "(unnamed lead)"
-        matched_leads += 1
 
-        # Bucket each opp under its date_won (in PT); for the lead-level "closed" count
-        # and the closed_leads list, group same-day opps so one lead = one row per day.
+        # Group opps under their date_won (PT) once — reused for both attributions.
         opps_by_day = defaultdict(list)
         for opp in opps:
             try:
@@ -855,24 +888,79 @@ def fetch_scraper_closes_per_day(scrapers, fetch_start, fetch_end_exclusive):
                 opps_by_day[day].append(opp)
             except ValueError:
                 continue
+        if not opps_by_day:
+            continue
 
-        for day, day_opps in opps_by_day.items():
-            out[scraper_uid]["meetings_closed"][day] += 1
-            day_value = sum(int(o.get("value") or 0) for o in day_opps) / 100.0
-            out[scraper_uid]["meetings_closed_revenue"][day] += day_value
-            out[scraper_uid]["meetings_closed_leads"][day].append({
-                "lead_id":   lead_id,
-                "lead_name": lead_name,
-                "value":     round(day_value, 2),
-                "won_count": len(day_opps),
-            })
+        # ─ SCRAPER attribution: lead's Setter Name matches a scraper handle ─
+        scraper_uid = scraper_setter_to_uid.get(setter_name_val)
+        if scraper_uid:
+            scraper_matched += 1
+            for day, day_opps in opps_by_day.items():
+                scraper_out[scraper_uid]["meetings_closed"][day] += 1
+                day_value = sum(int(o.get("value") or 0) for o in day_opps) / 100.0
+                scraper_out[scraper_uid]["meetings_closed_revenue"][day] += day_value
+                scraper_out[scraper_uid]["meetings_closed_leads"][day].append({
+                    "lead_id":   lead_id,
+                    "lead_name": lead_name,
+                    "value":     round(day_value, 2),
+                    "won_count": len(day_opps),
+                })
 
-    print(f"  closes-in-period: {matched_leads} leads matched a scraper setter", flush=True)
+        # ─ SETTER attribution: for each configured setter, classify inbound/outbound ─
+        for setter in setters:
+            setter_uid = setter["user_id"]
+            prefix     = setter["discovery_title_prefix"]
+            scraper_handle = setter.get("scraper_setter_field_value")
 
-    return {
+            has_vqd = _lead_has_vqd_by(lead_id, setter_uid, prefix)
+
+            if has_vqd:
+                bucket = "inbound"
+            elif scraper_handle and setter_name_val == scraper_handle:
+                bucket = "outbound"
+            else:
+                continue
+
+            for day, day_opps in opps_by_day.items():
+                day_value = sum(int(o.get("value") or 0) for o in day_opps) / 100.0
+                entry = {
+                    "lead_id":   lead_id,
+                    "lead_name": lead_name,
+                    "value":     round(day_value, 2),
+                    "won_count": len(day_opps),
+                }
+                if bucket == "inbound":
+                    setter_out[setter_uid]["inbound_revenue"][day] += day_value
+                    setter_out[setter_uid]["inbound_leads"][day].append(entry)
+                    setter_inbound += 1
+                else:
+                    setter_out[setter_uid]["outbound_revenue"][day] += day_value
+                    setter_out[setter_uid]["outbound_leads"][day].append(entry)
+                    setter_outbound += 1
+
+    print(f"  scraper credit: {scraper_matched} leads matched a scraper Setter Name",
+          flush=True)
+    if setters:
+        print(f"  setter credit:  {setter_inbound} inbound + {setter_outbound} outbound (rows)",
+              flush=True)
+
+    scraper_result = {
         uid: {k: dict(v) for k, v in data.items()}
-        for uid, data in out.items()
+        for uid, data in scraper_out.items()
     }
+    setter_result = {
+        uid: {k: dict(v) for k, v in data.items()}
+        for uid, data in setter_out.items()
+    }
+    return scraper_result, setter_result
+
+
+# Backwards-compat shim so any external caller (or future me) that expects the
+# old signature keeps working. Just calls fetch_closes_per_day with no setters
+# and returns the scraper dict.
+def fetch_scraper_closes_per_day(scrapers, fetch_start, fetch_end_exclusive):
+    scraper_result, _ = fetch_closes_per_day(scrapers, [], fetch_start, fetch_end_exclusive)
+    return scraper_result
 
 
 def build_scraper_data(scraper, fetch_start, fetch_end_exclusive):
@@ -1020,6 +1108,8 @@ def aggregate_setter_for_period(per_day, start_pt, end_exclusive_pt,
 
     `scraper_per_day` lets us pull "Discovery Set" from the matching scraper's
     meetings_booked bucket — same setter, same booking event, no second API call.
+    Inbound / Outbound revenue come from the setter's own per_day buckets that
+    were populated by fetch_closes_per_day.
     """
     s, e = start_pt.date(), end_exclusive_pt.date()
     held  = _sum_in_range(per_day.get("discovery_held"),  s, e)
@@ -1028,11 +1118,33 @@ def aggregate_setter_for_period(per_day, start_pt, end_exclusive_pt,
     if scraper_per_day:
         set_count = _sum_in_range(scraper_per_day.get("meetings_booked"), s, e)
     show_pct = round(100.0 * shown / held, 1) if held else 0.0
+
+    # Inbound / Outbound revenue + lead lists (sliced to period, sorted by value desc)
+    inbound_revenue  = _sum_in_range(per_day.get("inbound_revenue"),  s, e)
+    outbound_revenue = _sum_in_range(per_day.get("outbound_revenue"), s, e)
+
+    def _flatten_leads(day_dict):
+        out = []
+        for day_str, leads in (day_dict or {}).items():
+            try:
+                d = datetime.strptime(day_str, "%Y-%m-%d").date()
+            except ValueError:
+                continue
+            if s <= d < e:
+                for ld in (leads or []):
+                    out.append({**ld, "day": day_str})
+        out.sort(key=lambda r: r.get("value") or 0, reverse=True)
+        return out
+
     return {
-        "discovery_held":  held,
-        "discovery_shown": shown,
-        "discovery_set":   set_count,
-        "show_pct":        show_pct,
+        "discovery_held":   held,
+        "discovery_shown":  shown,
+        "discovery_set":    set_count,
+        "show_pct":         show_pct,
+        "inbound_revenue":  round(inbound_revenue,  2),
+        "outbound_revenue": round(outbound_revenue, 2),
+        "inbound_leads":    _flatten_leads(per_day.get("inbound_leads")),
+        "outbound_leads":   _flatten_leads(per_day.get("outbound_leads")),
     }
 
 
@@ -1286,12 +1398,13 @@ def main():
                               "name": scr_cfg["name"]})
         scraper_per_day_by_uid[scr_cfg["user_id"]] = per_day
 
-    # Close-date attribution for scraper closes / revenue.  Single org-wide opp
-    # query keyed by date_won → look up each lead → credit the matching scraper.
-    # Catches deals that closed in the period even when the original meeting was
-    # booked months earlier (the booked-in-period model used to miss those).
-    print("\n[scrapers] computing closes-in-period by date_won", flush=True)
-    closes_by_uid = fetch_scraper_closes_per_day(SCRAPERS, fetch_start, month_end)
+    # Close-date attribution for scraper closes / revenue AND setter Inbound /
+    # Outbound revenue.  Single org-wide opp query + one lead lookup each →
+    # classifies each closed-won lead for both roles in one pass.
+    print("\n[closes] computing scraper + setter close attribution", flush=True)
+    closes_by_uid, setter_closes_by_uid = fetch_closes_per_day(
+        SCRAPERS, SETTERS, fetch_start, month_end
+    )
     for uid, closes in closes_by_uid.items():
         if uid in scraper_per_day_by_uid:
             scraper_per_day_by_uid[uid].update(closes)
@@ -1352,6 +1465,13 @@ def main():
         setter_per_day_by_uid[setter_cfg["user_id"]] = per_day
         setter_meta.append({"user_id": setter_cfg["user_id"], "name": setter_cfg["name"]})
 
+    # Merge Inbound / Outbound close attribution (computed earlier alongside
+    # scraper closes) into each setter's per_day dict so aggregate_setter_for_period
+    # can slice by period.
+    for uid, closes in setter_closes_by_uid.items():
+        if uid in setter_per_day_by_uid:
+            setter_per_day_by_uid[uid].update(closes)
+
     def _build_setters_view(start_pt, end_pt):
         out = []
         for meta in setter_meta:
@@ -1372,10 +1492,14 @@ def main():
     for sm in setters_mtd:
         w = by_uid_setters_wtd.get(sm["user_id"], {})
         wtd_block = {
-            "discovery_held":  w.get("discovery_held",  0),
-            "discovery_shown": w.get("discovery_shown", 0),
-            "discovery_set":   w.get("discovery_set",   0),
-            "show_pct":        w.get("show_pct",        0.0),
+            "discovery_held":   w.get("discovery_held",   0),
+            "discovery_shown":  w.get("discovery_shown",  0),
+            "discovery_set":    w.get("discovery_set",    0),
+            "show_pct":         w.get("show_pct",         0.0),
+            "inbound_revenue":  w.get("inbound_revenue",  0),
+            "outbound_revenue": w.get("outbound_revenue", 0),
+            "inbound_leads":    w.get("inbound_leads",    []),
+            "outbound_leads":   w.get("outbound_leads",   []),
         }
         setters_combined.append({**sm, "wtd": wtd_block})
 
