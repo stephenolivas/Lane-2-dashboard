@@ -1151,6 +1151,9 @@ function renderScrapers(data) {
            <span class="rev-chev" id="rev-chev-${safeUid}">▸</span>
          </button>`
       : fmtMoney(rev);
+    const showPct = (s.meetings_booked_mtd > 0)
+      ? Math.round(100 * (s.meetings_shown_mtd || 0) / s.meetings_booked_mtd) + '%'
+      : '—';
     return `
       <tr>
         <td><div class="rep-name">${s.name}</div></td>
@@ -1160,14 +1163,19 @@ function renderScrapers(data) {
         </td>
         <td class="num">${fmtInt(s.meetings_booked_mtd)}</td>
         <td class="num">${fmtInt(s.meetings_shown_mtd)}</td>
+        <td class="num">${showPct}</td>
         <td class="num">${fmtInt(s.meetings_closed_ever)}</td>
         <td class="num rev-cell">${revCell}</td>
       </tr>
       <tr class="rev-detail-row" id="rev-detail-${safeUid}" hidden>
-        <td colspan="6">${renderClosedLeadsList(s.meetings_closed_leads)}</td>
+        <td colspan="7">${renderClosedLeadsList(s.meetings_closed_leads)}</td>
       </tr>
     `;
   }).join('');
+
+  const aggShowPct = (aggBooked > 0)
+    ? Math.round(100 * aggShown / aggBooked) + '%'
+    : '—';
 
   return `
     <div class="reps-table-wrap">
@@ -1178,6 +1186,7 @@ function renderScrapers(data) {
             <th># Activities</th>
             <th class="num">Meetings Booked</th>
             <th class="num">Meetings Shown</th>
+            <th class="num">Show %</th>
             <th class="num">Meetings Closed</th>
             <th class="num">Revenue Generated</th>
           </tr>
@@ -1192,6 +1201,7 @@ function renderScrapers(data) {
             </td>
             <td class="num">${fmtInt(aggBooked)}</td>
             <td class="num">${fmtInt(aggShown)}</td>
+            <td class="num">${aggShowPct}</td>
             <td class="num">${fmtInt(aggClosed)}</td>
             <td class="num">${fmtMoney(aggRevenue)}</td>
           </tr>
@@ -1692,7 +1702,7 @@ function openSidePanelScrapers(dayKey) {
 
   // Only include scrapers with any activity that day
   const scrapers = Object.values(breakdownByScraper).filter(s =>
-    (s.meetings_booked || 0) + (s.meetings_shown || 0) + (s.meetings_closed || 0)
+    (s.meetings_set || 0) + (s.meetings_booked || 0) + (s.meetings_shown || 0) + (s.meetings_closed || 0)
     + (s.outbound_calls || 0) + (s.outbound_emails || 0) + (s.outbound_sms || 0) > 0
   );
   scrapers.sort((a, b) => (b.meetings_booked || 0) - (a.meetings_booked || 0));
@@ -1702,8 +1712,10 @@ function openSidePanelScrapers(dayKey) {
     body.innerHTML = '<div class="side-panel-empty">No scraper activity recorded for this day.</div>';
     return;
   }
-  let tBook = 0, tShow = 0, tClose = 0, tCalls = 0, tEmails = 0, tSms = 0;
+  const fmtPct = (shown, booked) => booked > 0 ? Math.round(100 * shown / booked) + '%' : '—';
+  let tSet = 0, tBook = 0, tShow = 0, tClose = 0, tCalls = 0, tEmails = 0, tSms = 0;
   const rows = scrapers.map(s => {
+    tSet   += s.meetings_set || 0;
     tBook  += s.meetings_booked || 0;
     tShow  += s.meetings_shown || 0;
     tClose += s.meetings_closed || 0;
@@ -1711,10 +1723,13 @@ function openSidePanelScrapers(dayKey) {
     tEmails += s.outbound_emails || 0;
     tSms   += s.outbound_sms || 0;
     const dim = (n) => (n ? '' : 'zero-cell');
+    const pct = fmtPct(s.meetings_shown || 0, s.meetings_booked || 0);
     return `<tr>
       <td class="rep-cell">${s.name}</td>
+      <td class="num ${dim(s.meetings_set)}">${fmtInt(s.meetings_set)}</td>
       <td class="num ${dim(s.meetings_booked)}">${fmtInt(s.meetings_booked)}</td>
       <td class="num ${dim(s.meetings_shown)}">${fmtInt(s.meetings_shown)}</td>
+      <td class="num ${pct === '—' ? 'zero-cell' : ''}">${pct}</td>
       <td class="num ${dim(s.meetings_closed)}">${fmtInt(s.meetings_closed)}</td>
       <td class="num ${dim(s.outbound_calls)}">${fmtInt(s.outbound_calls)}</td>
       <td class="num ${dim(s.outbound_emails)}">${fmtInt(s.outbound_emails)}</td>
@@ -1727,8 +1742,10 @@ function openSidePanelScrapers(dayKey) {
       <thead>
         <tr>
           <th>Scraper</th>
-          <th class="num">Meetings Booked</th>
+          <th class="num">Meetings Set</th>
+          <th class="num">Booked for Today</th>
           <th class="num">Shown</th>
+          <th class="num">Show %</th>
           <th class="num">Closed</th>
           <th class="num">Outbound Calls</th>
           <th class="num">Outbound Emails</th>
@@ -1739,8 +1756,10 @@ function openSidePanelScrapers(dayKey) {
         ${rows}
         <tr class="panel-totals">
           <td>Total</td>
+          <td class="num">${fmtInt(tSet)}</td>
           <td class="num">${fmtInt(tBook)}</td>
           <td class="num">${fmtInt(tShow)}</td>
+          <td class="num">${fmtPct(tShow, tBook)}</td>
           <td class="num">${fmtInt(tClose)}</td>
           <td class="num">${fmtInt(tCalls)}</td>
           <td class="num">${fmtInt(tEmails)}</td>
