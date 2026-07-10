@@ -993,6 +993,83 @@ def build_scraper_data(scraper, fetch_start, fetch_end_exclusive):
     return {**act_pd, **mtg_pd}
 
 
+def fetch_meetings_set_per_day(scrapers, start_pt, end_exclusive_pt):
+    """Per-scraper per-day count of meetings SET (i.e., meetings whose date_created
+    falls in the range).
+
+    Matches the attribution used by the call-capacity dashboard's EOD "Scraper
+    Bookings" section: credited via the LEAD's `Reactivation - Setter Name`
+    field, filtered to `Funnel Name = "Reactivation Scrapers"` only. That excludes
+    William's Vendingpreneurs Quick Discovery meetings, Anthony's inbound calls,
+    etc. — only scraper-flow bookings count here.
+
+    Single org-wide `/activity/meeting/` query + one lead lookup per unique lead
+    (cached). Called with a NARROWER range than the main fetch_start — typically
+    just the ~3 weeks whose archives we're writing on this run — to keep runtime
+    manageable. Older days in existing archives keep whatever value they had
+    (`0` if the metric didn't exist yet, real number if it did).
+
+    Returns:
+      {scraper_user_id: {day: count}}
+    """
+    if not scrapers:
+        return {}
+    setter_to_uid = {s["setter_field_value"]: s["user_id"] for s in scrapers}
+
+    since_iso = start_pt.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    end_iso   = end_exclusive_pt.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    lead_cache = {}   # lead_id -> setter_field_value (or None if not attributed)
+    result = {uid: defaultdict(int) for uid in setter_to_uid.values()}
+
+    total_seen = 0
+    attributed = 0
+    for mtg in close_paginate_skip("/activity/meeting/", {
+        "date_created__gte": since_iso,
+        "date_created__lt":  end_iso,
+    }):
+        total_seen += 1
+        lead_id = mtg.get("lead_id")
+        date_created = mtg.get("date_created")
+        if not lead_id or not date_created:
+            continue
+
+        if lead_id not in lead_cache:
+            try:
+                ld = close_get(f"/lead/{lead_id}/", {
+                    "_fields": (
+                        f"id,custom.{FIELD_SETTER_NAME},"
+                        f"custom.{FIELD_FUNNEL_NAME}"
+                    )
+                })
+                funnel = get_custom(ld, FIELD_FUNNEL_NAME)
+                setter = (get_custom(ld, FIELD_SETTER_NAME) or "").strip()
+                # Only count meetings on Reactivation Scrapers funnel leads
+                # AND where Setter Name matches a configured scraper — mirrors
+                # the call-capacity EOD email's rule.
+                if funnel == "Reactivation Scrapers" and setter in setter_to_uid:
+                    lead_cache[lead_id] = setter
+                else:
+                    lead_cache[lead_id] = None
+            except requests.HTTPError:
+                lead_cache[lead_id] = None
+
+        setter = lead_cache[lead_id]
+        if not setter:
+            continue
+        try:
+            dt = datetime.fromisoformat(date_created.replace("Z", "+00:00"))
+            day = dt.astimezone(TIMEZONE).date().isoformat()
+        except ValueError:
+            continue
+        result[setter_to_uid[setter]][day] += 1
+        attributed += 1
+
+    print(f"  meetings-set: scanned {total_seen} meetings, attributed {attributed} "
+          f"across {len(lead_cache)} unique leads looked up", flush=True)
+    return {uid: dict(days) for uid, days in result.items()}
+
+
 def aggregate_scraper_for_period(per_day, start_pt, end_exclusive_pt):
     """Aggregate a scraper's per-day data into period totals."""
     s, e = start_pt.date(), end_exclusive_pt.date()
@@ -1233,6 +1310,7 @@ def _build_scraper_daily_breakdowns(scraper_meta, scraper_per_day_by_uid,
             set(pd.get("meetings_booked", {})) |
             set(pd.get("meetings_shown",  {})) |
             set(pd.get("meetings_closed", {})) |
+            set(pd.get("meetings_set",    {})) |
             set(pd.get("outbound_calls",  {})) |
             set(pd.get("outbound_emails", {})) |
             set(pd.get("outbound_sms",    {}))
@@ -1245,6 +1323,7 @@ def _build_scraper_daily_breakdowns(scraper_meta, scraper_per_day_by_uid,
             if not (s <= dd < e):
                 continue
             row = {
+                "meetings_set":    pd.get("meetings_set",    {}).get(day, 0),
                 "meetings_booked": pd.get("meetings_booked", {}).get(day, 0),
                 "meetings_shown":  pd.get("meetings_shown",  {}).get(day, 0),
                 "meetings_closed": pd.get("meetings_closed", {}).get(day, 0),
@@ -1453,6 +1532,29 @@ def main():
     for uid, closes in closes_by_uid.items():
         if uid in scraper_per_day_by_uid:
             scraper_per_day_by_uid[uid].update(closes)
+
+    # ─ Scraper "Meetings Set" (activity metric, per-day) ─────────────────
+    # Meetings whose date_created falls in a given day, credited to the
+    # scraper via the LEAD's Setter Name field and filtered to Reactivation
+    # Scrapers funnel (matches the call-capacity dashboard's convention).
+    #
+    # Scoped narrower than fetch_start on normal runs to keep runtime down —
+    # we only need this data for the archives we're actually writing on this
+    # run (current week + 2 backfill weeks). In backfill mode we cover the
+    # full target month.
+    if backfill_month_env:
+        meetings_set_start = fetch_start
+    else:
+        meetings_set_start = earliest_week
+    print(f"\n[scrapers] fetching meetings-set (activity-based, "
+          f"range {meetings_set_start.date()} → {(month_end - timedelta(days=1)).date()})",
+          flush=True)
+    meetings_set_by_uid = fetch_meetings_set_per_day(
+        SCRAPERS, meetings_set_start, month_end
+    )
+    for uid, days in meetings_set_by_uid.items():
+        if uid in scraper_per_day_by_uid:
+            scraper_per_day_by_uid[uid]["meetings_set"] = days
 
     # ─ Assemble views for MTD + current WTD ───────────────────────────────
     reps_mtd     = _build_rep_view(rep_meta, rep_per_day_by_uid,
