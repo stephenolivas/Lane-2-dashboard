@@ -1,961 +1,1832 @@
 #!/usr/bin/env python3
 """
-Fetch WEEK-TO-DATE rep-level metrics from Close CRM.
-Writes data.json for the GitHub Pages dashboard.
+Lane 2 Activity Dashboard — Data Fetcher
 
-Strategy:
-  1. Query leads where "First Sales Call Booked Date" is within Mon–today (PDT)
-  2. Exclude leads with Canceled/Outside US status, excluded users
-  3. Process lead-level CRM fields for compliance, funnel, shown/qualified
-  4. Separately fetch Closed/Won opps, task adherence, qualified pipeline
+Pulls Close CRM data and writes `data.json` for the Lane 2 Activity Dashboard.
+Runs every 15 min Mon–Fri via GitHub Actions + cron-job.org (workflow_dispatch).
 
-Weekly targets per rep:
-  Meetings Booked: 20    Close Rate: 30%
-  Meetings Shown: 15     QA Score: >7 (TBD)
-  Opps Qualified: 10     Avg/Deal: $8k
-  Opps Closed Won: 3     CRM Compliance: 100%
-  Revenue Booked: $24k   Task Adherence: 100% (TBD)
+Two payloads:
+  1. CALENDAR — for each day in the current month, count UNIQUE leads
+     newly assigned to a Lane 2 rep that day. Dedupe per (lead, day) so a
+     bounce A→B→A counts as 1. Excludes LTF - Quiz Funnel leads.
+  2. REP DETAILS — per Lane 2 rep, a snapshot of: currently owned leads,
+     Handraiser breakdown, MTD activities, leads with 0 comms ever,
+     outbound calls/emails MTD, calls booked MTD, deals closed/lost MTD.
+
+Output sorted by owned_leads desc.
 """
 
 import json
 import os
 import sys
 import time
+from collections import defaultdict
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+from zoneinfo import ZoneInfo
+
 import requests
-from datetime import datetime, timezone, timedelta
-from calendar import monthrange
 
-# ── Config ───────────────────────────────────────────────────────────────────
+# ============================================================================
+# CONFIG
+# ============================================================================
 
-CLOSE_API_KEY = os.environ.get("CLOSE_API_KEY", "")
-BASE_URL = "https://api.close.com/api/v1"
+CLOSE_API_KEY = os.environ.get("CLOSE_API_KEY")
+if not CLOSE_API_KEY:
+    print("ERROR: CLOSE_API_KEY env var not set", file=sys.stderr, flush=True)
+    sys.exit(1)
 
-PIPELINE_ID = "pipe_78hyBUVS7IKikGEmstObu1"
-CLOSED_WON_STATUS_ID = "stat_WnFc0uhjcjV0cc3bVzdFVqDz7av6rbsOmOvHUsO6s03"
+CLOSE_BASE_URL = "https://api.close.com/api/v1"
+TIMEZONE = ZoneInfo("America/Los_Angeles")
+THROTTLE_SECONDS = 0.1  # Close allows ~60 req/sec; 0.1s = 10 req/sec is safe
 
-EXCLUDED_LEAD_STATUSES = {
-    "stat_hWIGHjzyNpl4YjIFSFz3VK4fp2ny10SFJLKAihmo4KT",  # Canceled (by Lead)
-    "stat_YV4ZngDB4IGjLjlOf0YTFEWuKZJ6fhNxVkzQkvKYfdB",  # Outside the US
-}
+# Lane 2 reps. Display order doesn't matter — output is sorted by owned_leads desc.
+LANE_2_REPS = [
+    {"name": "Kelly Schrader",  "user_id": "user_WquWudQN7dghZsAPiNY80eJUmg1EadQg2UCQdvgbif7"},
+    {"name": "Jason Aaron",     "user_id": "user_MrBLkl5wCqTm7QxHxPo2ydNV5KxMllg6YZDVc12Aqzj"},
+]
+LANE_2_USER_IDS = {r["user_id"] for r in LANE_2_REPS}
 
-# Opp statuses where confidence=0 is expected (skip confidence check for CRM compliance)
-LOST_OPP_STATUSES = {
-    "stat_bBWcww9IflskaleadKuK2E4SGFF4qy3IuBucrqo7H4u",  # Lost
-    "stat_E9LE4YrRUQvQIIs7GoaWA4eOFqzs1GtsoV4qKWmvbYN",  # Outside the US
-    "stat_NCXVjokjo3VXirJx2eSAcRoKlEDg1WsO1sjeLfU8udO",  # No Show
-}
+# Scrapers (a.k.a. setters). They book meetings for the closers.
+# Each entry has the Close user_id (for activity attribution) and the exact
+# string value that the `Reactivation - Setter Name` custom field is set to
+# by the update_field.py automation — see reactivation-setter-name-field.md.
+SCRAPERS = [
+    {"name": "Vince Bartolini",
+     "user_id": "user_dQi0iL0igjCKtEXPSsv8ALDZMAz9orJxL60O7Q921jy",
+     "setter_field_value": "Vince Bartolini"},
+    {"name": "William Nowak",
+     "user_id": "user_ZNKG1S9eI71qxhSozBK4jskTVtJqXzfNCPWqmADRR9F",
+     "setter_field_value": "William Nowak"},
+    {"name": "Jacob Hepner",
+     "user_id": "user_IeWR2TlhpjqoXy3K6jX7u9C8c83iBnHXSIvFZpotF3z",
+     "setter_field_value": "Jacob Hepner"},
+    {"name": "Juan Cajina",
+     "user_id": "user_E2WNDcnSES6SFuqyEulrIakLepLqJzHIimWaovDFkhK",
+     "setter_field_value": "Juan Cajina"},
+    {"name": "Jennifer Padilla",
+     "user_id": "user_QgFeDsKkV4fsOtkTYeOJMURXPqqhZA8d4kHbE8rzat7",
+     "setter_field_value": "Jennifer Padilla"},
+]
 
-# Lead statuses excluded from "Open Leads" pipeline count
-CLOSED_LEAD_STATUSES = {
-    "stat_aR2jBa8YnTNZmHAnPsnlQuinBdaXpSBCkZGP3UvoBlV",  # Lost
-    "stat_hWIGHjzyNpl4YjIFSFz3VK4fp2ny10SFJLKAihmo4KT",  # Canceled (by Lead)
-    "stat_YV4ZngDB4IGjLjlOf0YTFEWuKZJ6fhNxVkzQkvKYfdB",  # Outside the US
-    "stat_0oW3iRpVp9z5DJq0cuwI1HgR0XhHAhykEPPIq4TFsxd",  # Closed / Won
-}
+# Setters hold their own discovery calls (in addition to the calls they book for
+# closers). Each entry pairs a Close user_id with the title prefix used by the
+# Calendly→Close integration; we match meeting activities whose title startswith
+# the prefix and whose user_id matches.
+#
+# For "Set" (meetings_set), we reuse the scraper section's meetings_booked count
+# for this user — the same person is appearing in both tables.
+SETTERS = [
+    {"name": "William Nowak",
+     "user_id": "user_ZNKG1S9eI71qxhSozBK4jskTVtJqXzfNCPWqmADRR9F",
+     "discovery_title_prefix": "Vendingpreneurs Quick Discovery",
+     # If this setter also books calls (Setter Name field), we bucket their
+     # scraper-credited closes as Outbound (unless the lead also has a VQD by
+     # this setter — those are Inbound). Value must match the SCRAPERS entry.
+     "scraper_setter_field_value": "William Nowak"},
+]
 
-# Pipeline estimation constants
-AVG_DEAL_VALUE = 8000
-CLOSE_RATE_ESTIMATE = 0.30
+# Close custom field IDs (verified from sibling dashboards)
+FIELD_LEAD_OWNER         = "cf_gOfS9pFwext58oberEegLyix8hZzeHrxhCZOVh3P3rd"
+FIELD_HANDRAISER         = "cf_Q1hRv8It46xsAEmpv4PRKdI1y0sPJnrnQrgRbIlF8uL"
+FIELD_FUNNEL_NAME        = "cf_xqDQE8fkPsWa0RNEve7hcaxKblCe6489XeZGRDzyPdX"
+FIELD_FIRST_CALL_BOOKED  = "cf_LFdYEQ6bsgp49YjZzefypDmdVx8iwuakWDSLPLpVrBq"
+FIELD_FIRST_CALL_SHOWUP  = "cf_OPyvpU45RdvjLqfm8V1VWwNxrGKogEH2IBJmfCj0Uhq"
+FIELD_SETTER_NAME        = "cf_vz6kNiu4ItFxRA8Y9HKlWIoQMq3TsdaQqKekQ2YuxVk"
 
-# Funnels to exclude from all metrics (removed from booked/shown/qualified/CRM/everything)
 EXCLUDED_FUNNELS = {"LTF - Quiz Funnel"}
 
-# Funnel source classification: In-House vs External
-FUNNEL_SOURCE = {
-    "Low Ticket Funnel": "External",
-    "LTF - Quiz Funnel": "External",
-    "Instagram": "External",
-    "YouTube": "In-House",
-    "YouTube - OG - Cam": "In-House",
-    "Website": "In-House",
-    "VSL": "In-House",
-    "Meta Ads": "In-House",
-    "Reactivation Email": "In-House",
-    "X": "External",
-    "Linkedin": "External",
-    "Internal Webinar": "In-House",
-    "WWWS": "In-House",
-    "Mike Newsletter": "In-House",
-    "Sales Reactivation": "In-House",
-    "Direct Traffic": "In-House",
-    "Side Hustle Nation": "In-House",
-    "Passivepreneurs": "In-House",
-    "Instagram Setter": "External",
-    "X Setter": "External",
-    "Linkedin Setter": "External",
-    "Webinar": "In-House",
-}
+# ============================================================================
+# HTTP SESSION
+# ============================================================================
 
-# Lead statuses with special CRM compliance handling
-NO_SHOW_LEAD_STATUS = "stat_5CqIgNJnGYO357zXjSnH6BAkKyoCvYUOBxVvpYfDMZn"
-RESCHEDULE_LEAD_STATUS = "stat_2SmOUMCp1vDFJF0TcJ011hNnpLYWDGwugyo4JyiRMEP"
-LOST_LEAD_STATUS = "stat_aR2jBa8YnTNZmHAnPsnlQuinBdaXpSBCkZGP3UvoBlV"
-
-# Custom field IDs (lead object)
-CF_FIRST_CALL_SHOW_ID     = "cf_OPyvpU45RdvjLqfm8V1VWwNxrGKogEH2IBJmfCj0Uhq"
-CF_LEAD_OWNER_ID           = "cf_gOfS9pFwext58oberEegLyix8hZzeHrxhCZOVh3P3rd"
-CF_QUALIFIED_ID            = "cf_ZDx7NBQaDzV1yYrFcBMzt6cIYj81dAcswpNN0CQzCPS"
-CF_CALL_DISPOSITION_ID     = "cf_n2QvikNfeZ0uWObMsyCJmnXnrbWNLGlSvYiKJTwxTqU"
-CF_FUNNEL_NAME_ID          = "cf_xqDQE8fkPsWa0RNEve7hcaxKblCe6489XeZGRDzyPdX"
-CF_FIRST_SALES_CALL_BOOKED = "cf_LFdYEQ6bsgp49YjZzefypDmdVx8iwuakWDSLPLpVrBq"
-CF_LOST_REASON_ID          = "cf_R4i05fLNOQP8yveAs4ofTMMYGAQnkLLklunP4lov2Bt"
-
-# Fields to request when fetching individual leads
-LEAD_FIELDS = ",".join([
-    "id", "display_name", "status_id",
-    f"custom.{CF_FIRST_CALL_SHOW_ID}",
-    f"custom.{CF_LEAD_OWNER_ID}",
-    f"custom.{CF_QUALIFIED_ID}",
-    f"custom.{CF_CALL_DISPOSITION_ID}",
-    f"custom.{CF_FUNNEL_NAME_ID}",
-    f"custom.{CF_FIRST_SALES_CALL_BOOKED}",
-    f"custom.{CF_LOST_REASON_ID}",
-    "opportunities",
-])
-
-# Weekly targets (per rep) — Lane 1 (default)
-WEEKLY_TARGETS = {
-    "booked": 15,
-    "shown": 11,
-    "qualified": 8,
-    "deals": 3,
-    "revenue": 24000,
-    "close_rate": 20,
-    "qa_score": 7,
-    "avg_rev_per_deal": 8000,
-    "crm_compliance": 90,
-    "task_adherence": 100,
-}
-
-# Lane 2 targets — None means no goal (show "—")
-LANE_2_TARGETS = {
-    "booked": None,
-    "shown": None,
-    "qualified": None,
-    "deals": 1,
-    "revenue": None,
-    "close_rate": 7,
-    "qa_score": None,
-    "avg_rev_per_deal": None,
-    "crm_compliance": 90,
-    "task_adherence": 100,
-}
-
-LANE_2_REPS = {
-    "Kelly Schrader",
-    "Jason Aaron", "Dubem Adindu",
-}
-
-REP_QUOTAS = {
-    "Christian Hartwell": 100_000,
-    "Scott Seymour": 100_000,
-    "Eric Piccione": 100_000,
-    "Jason Aaron": 75_000,
-    "Robin Perkins": 75_000,
-    "Dubem Adindu": 100_000,
-    "Zac Clover": 0,
-    "Kelly Schrader": 0,
-    "Joe Dysert": 0,
-}
-
-EXCLUDE_USERS = {
-    "Kristin Nelson", "Spencer Reynolds", "Stephen Olivas",
-    "Ahmad Bukhari", "Mallory Kent", "Unknown", "Julia Scaroni",
-    "William Chase", "Jordan Humphrey", "Andrea Shoop", "Ryan Jones",
-    "Ategeka Musinguzi", "Vince Bartolini", "Steven Starnes", "Chris Wanke",
-    "Bryan Barcus", "Elvis Ellis", "Cameron Caswell", "John Kirk",
-    "Jake Skinner", "Lyle Hubbard", "Jacob Hepner",
-}
-MANAGER_USERS = {"Joe Dysert"}
-LEAD_USERS = {"Christian Hartwell", "Jason Aaron"}
+session = requests.Session()
+session.auth = (CLOSE_API_KEY, "")
+session.headers.update({"Content-Type": "application/json"})
 
 
-# ── Fetch booked leads by "First Sales Call Booked Date" field ─────────────
+def close_get(path, params=None):
+    """GET to Close API with throttle + retries on 429 / 5xx / network timeouts.
 
-def fetch_booked_leads(monday_str, today_str, user_map, name_to_id):
-    """Query leads where 'First Sales Call Booked Date' is within Mon–today.
-    Process each lead for booked/shown/qualified/CRM/funnel counts.
-    Returns the same data structures the old meeting-based approach produced.
+    The /event/ endpoint can occasionally take longer than 30s to respond when
+    paginating through tens of thousands of events. The timeout is set to 60s
+    and any ReadTimeout/ConnectionError is retried with exponential backoff.
+
+    On 4xx errors (other than 429), prints the response body before raising
+    so we can see what Close actually rejected.
     """
-    query = (f'"First Sales Call Booked Date" >= "{monday_str}" '
-             f'"First Sales Call Booked Date" <= "{today_str}"')
+    url = f"{CLOSE_BASE_URL}{path}"
+    max_attempts = 5
+    for attempt in range(max_attempts):
+        try:
+            r = session.get(url, params=params, timeout=60)
+        except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as e:
+            # Transient network problem — retry with backoff
+            if attempt < max_attempts - 1:
+                wait = 2 ** attempt   # 1, 2, 4, 8s
+                print(f"  ⚠ {type(e).__name__} on {path}, "
+                      f"retry {attempt + 1}/{max_attempts - 1} in {wait}s",
+                      flush=True)
+                time.sleep(wait)
+                continue
+            raise
 
-    all_leads = []
+        time.sleep(THROTTLE_SECONDS)
+        if r.status_code == 429:
+            wait = int(r.headers.get("Retry-After", 5))
+            print(f"  rate-limited, sleeping {wait}s", flush=True)
+            time.sleep(wait)
+            continue
+        if 500 <= r.status_code < 600 and attempt < max_attempts - 1:
+            wait = 2 ** attempt
+            print(f"  {r.status_code} from Close, retrying ({attempt + 1}/{max_attempts - 1}) in {wait}s", flush=True)
+            time.sleep(wait)
+            continue
+        if not r.ok:
+            # Surface what Close actually said before raising — generic
+            # raise_for_status() hides the body.
+            print(f"  !! {r.status_code} {r.reason}  url: {r.url}", flush=True)
+            try:
+                print(f"  body: {json.dumps(r.json(), indent=2)[:2000]}", flush=True)
+            except Exception:
+                print(f"  body: {r.text[:2000]}", flush=True)
+        r.raise_for_status()
+        return r.json()
+    raise RuntimeError(f"Close API failed after {max_attempts} attempts: {path}")
+
+
+def close_paginate_skip(path, params=None):
+    """Yield items across pages for endpoints using _skip pagination."""
+    params = dict(params or {})
+    params.setdefault("_limit", 100)
     skip = 0
     while True:
-        data = api_get("/lead/", {
-            "query": query,
-            "_fields": LEAD_FIELDS,
-            "_skip": skip,
-            "_limit": 200,
-        })
-        leads = data.get("data", [])
-        all_leads.extend(leads)
-        if not data.get("has_more", False):
-            break
-        skip += 200
+        params["_skip"] = skip
+        data = close_get(path, params)
+        items = data.get("data", [])
+        for item in items:
+            yield item
+        if not data.get("has_more") or not items:
+            return
+        skip += len(items)
 
-    print(f"  Leads with First Sales Call Booked Date in range: {len(all_leads)}", flush=True)
 
-    rep_booked = {}
-    rep_shown = {}
-    rep_qualified = {}
-    rep_crm_filled = {}
-    rep_crm_total = {}
-    # Per-field CRM detail tracking
-    rep_crm_show_up = {}      # {rep: [filled, total]}
-    rep_crm_disposition = {}
-    rep_crm_qualified = {}
-    rep_crm_confidence = {}
-    rep_crm_lost_reason = {}
-    rep_crm_missing = {}      # {rep: [{name, lead_id, missing: [...]}, ...]}
-    funnel_counts = {}         # {funnel_name: count}
+def close_paginate_cursor(path, params=None):
+    """Yield items across pages for endpoints using _cursor pagination (e.g. /event/).
 
-    crm_skipped_future = 0
-    crm_skipped_canceled = 0
-    crm_skipped_reschedule = 0
-    excluded_status = 0
-    excluded_user = 0
-    excluded_funnel = 0
+    The /event/ endpoint caps `_limit` at 50 per its docs, so default to 50 here.
+    """
+    params = dict(params or {})
+    params.setdefault("_limit", 50)
+    cursor = None
+    while True:
+        if cursor:
+            params["_cursor"] = cursor
+        data = close_get(path, params)
+        for item in data.get("data", []):
+            yield item
+        cursor = data.get("cursor_next")
+        if not cursor:
+            return
 
-    for lead in all_leads:
-        status_id = lead.get("status_id", "")
-        if status_id in EXCLUDED_LEAD_STATUSES:
-            excluded_status += 1
-            continue
 
-        # Custom fields — try flat first, then nested custom dict
-        show_up = lead.get(f"custom.{CF_FIRST_CALL_SHOW_ID}", "")
-        owner_raw = lead.get(f"custom.{CF_LEAD_OWNER_ID}", "")
-        qualified_val = lead.get(f"custom.{CF_QUALIFIED_ID}", "")
-        disposition = lead.get(f"custom.{CF_CALL_DISPOSITION_ID}", "")
-        booked_date = lead.get(f"custom.{CF_FIRST_SALES_CALL_BOOKED}", "")
-        lost_reason = lead.get(f"custom.{CF_LOST_REASON_ID}", "")
+def close_count(path, params=None):
+    """Cheap count of how many items match a list query.
 
-        custom = lead.get("custom", {})
-        if not show_up:
-            show_up = custom.get(CF_FIRST_CALL_SHOW_ID, "")
-        if not owner_raw:
-            owner_raw = custom.get(CF_LEAD_OWNER_ID, "")
-        if not qualified_val:
-            qualified_val = custom.get(CF_QUALIFIED_ID, "")
-        if not disposition:
-            disposition = custom.get(CF_CALL_DISPOSITION_ID, "")
-        if not booked_date:
-            booked_date = custom.get(CF_FIRST_SALES_CALL_BOOKED, "")
-        if not lost_reason:
-            lost_reason = custom.get(CF_LOST_REASON_ID, "")
+    Fast path: call with _limit=1 and read `total_results` from the response.
+    Works for /lead/ and /opportunity/.
 
-        # Funnel name
-        funnel_raw = lead.get(f"custom.{CF_FUNNEL_NAME_ID}", "")
-        if not funnel_raw:
-            funnel_raw = custom.get(CF_FUNNEL_NAME_ID, "")
+    Slow path: type-specific activity endpoints (/activity/call/, /activity/email/, etc.)
+    do NOT return `total_results`. When it's missing we re-paginate the endpoint
+    fully and count items. Returning len(data) from the _limit=1 response would
+    incorrectly give 1 for any non-empty result.
+    """
+    p_fast = dict(params or {})
+    p_fast["_limit"] = 1
+    data = close_get(path, p_fast)
+    total = data.get("total_results")
+    if total is not None:
+        return total
+    # Slow path: paginate the original params (without our _limit=1 override).
+    return sum(1 for _ in close_paginate_skip(path, dict(params or {})))
 
-        rep_name = resolve_owner(owner_raw, user_map, name_to_id)
-        if rep_name in EXCLUDE_USERS:
-            excluded_user += 1
-            continue
 
-        # Funnel name — exclude leads from blacklisted funnels
-        funnel_name = str(funnel_raw).strip() if funnel_raw else "Unknown"
-        if funnel_name in EXCLUDED_FUNNELS:
-            excluded_funnel += 1
-            continue
+# ============================================================================
+# DATA HELPERS
+# ============================================================================
 
-        # Track funnel
-        funnel_counts[funnel_name] = funnel_counts.get(funnel_name, 0) + 1
+def get_custom(payload, field_id):
+    """
+    Read a Close custom field from a payload that may use either
+    flat keys ('custom.cf_xxx') or a nested dict ({'custom': {'cf_xxx': ...}}).
 
-        rep_booked[rep_name] = rep_booked.get(rep_name, 0) + 1
+    Close's REST responses store custom fields as flat top-level keys (e.g.
+    `"custom.cf_gOfS9pFw…": "user_xxx"`). The nested-dict form is included as
+    a defensive fallback in case any endpoint serializes differently.
+    """
+    if not payload:
+        return None
+    v = payload.get(f"custom.{field_id}")
+    if v is not None:
+        return v
+    nested = payload.get("custom")
+    if isinstance(nested, dict):
+        return nested.get(field_id)
+    return None
 
-        if str(show_up).strip().lower() == "yes":
-            rep_shown[rep_name] = rep_shown.get(rep_name, 0) + 1
 
-        if str(qualified_val).strip().lower() == "yes":
-            rep_qualified[rep_name] = rep_qualified.get(rep_name, 0) + 1
+# ============================================================================
+# DATE HELPERS
+# ============================================================================
 
-        # CRM Compliance — only for past meetings (booked date < today)
-        is_past = str(booked_date)[:10] < today_str if booked_date else False
-        disp_lower = str(disposition).strip().lower()
-        is_canceled_call = disp_lower in ("canceled", "canceled - rescheduled")
-        is_reschedule = status_id == RESCHEDULE_LEAD_STATUS
-        is_no_show = status_id == NO_SHOW_LEAD_STATUS
-        is_lost = status_id == LOST_LEAD_STATUS
+def now_pt():
+    return datetime.now(TIMEZONE)
 
-        if is_past and not is_canceled_call and not is_reschedule:
 
-            # Init per-field tracking for this rep
-            if rep_name not in rep_crm_show_up:
-                rep_crm_show_up[rep_name] = [0, 0]
-                rep_crm_disposition[rep_name] = [0, 0]
-                rep_crm_qualified[rep_name] = [0, 0]
-                rep_crm_confidence[rep_name] = [0, 0]
-                rep_crm_lost_reason[rep_name] = [0, 0]
+def month_bounds(now=None):
+    """Return (month_start_pt, month_end_pt_exclusive, 'YYYY-MM')."""
+    now = now or now_pt()
+    start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    if start.month == 12:
+        end = start.replace(year=start.year + 1, month=1)
+    else:
+        end = start.replace(month=start.month + 1)
+    return start, end, start.strftime("%Y-%m")
 
-            # No Show leads: 2 fields (Show Up + Disposition)
-            # Lost leads: 5 fields (standard 4 + Lost Reason)
-            # All other leads: 4 fields
-            crm_checks = 2 if is_no_show else (5 if is_lost else 4)
-            crm_filled = 0
-            missing_fields = []
 
-            # Field 1: Show Up (always checked)
-            rep_crm_show_up[rep_name][1] += 1
-            if is_field_filled(show_up):
-                crm_filled += 1
-                rep_crm_show_up[rep_name][0] += 1
-            else:
-                missing_fields.append("Show Up")
+def days_in_month(month_start, month_end):
+    days, d, end_d = [], month_start.date(), month_end.date()
+    while d < end_d:
+        days.append(d)
+        d += timedelta(days=1)
+    return days
 
-            # Field 2: Disposition (always checked)
-            rep_crm_disposition[rep_name][1] += 1
-            if is_field_filled(disposition):
-                crm_filled += 1
-                rep_crm_disposition[rep_name][0] += 1
-            else:
-                missing_fields.append("Disposition")
 
-            # Field 3: Qualified (skip for No Show)
-            if not is_no_show:
-                rep_crm_qualified[rep_name][1] += 1
-                if is_field_filled(qualified_val):
-                    crm_filled += 1
-                    rep_crm_qualified[rep_name][0] += 1
-                else:
-                    missing_fields.append("Qualified")
+def business_days_elapsed(now):
+    """Count business days (Mon-Fri) from the 1st of the month through today inclusive."""
+    d = now.replace(day=1).date()
+    end_d = now.date()
+    count = 0
+    while d <= end_d:
+        if d.weekday() < 5:   # 0=Mon ... 4=Fri
+            count += 1
+        d += timedelta(days=1)
+    return max(count, 1)   # avoid divide-by-zero on day-1 weekend edge case
 
-            # Field 4: Opp Confidence (skip for No Show)
-            if not is_no_show:
-                rep_crm_confidence[rep_name][1] += 1
-                opp_confidence_filled = False
-                for opp in lead.get("opportunities", []):
-                    if opp.get("pipeline_id") == PIPELINE_ID:
-                        opp_status = opp.get("status_id", "")
-                        if opp_status in LOST_OPP_STATUSES:
-                            opp_confidence_filled = True
-                            break
-                        confidence = opp.get("confidence", 0) or 0
-                        if confidence > 0:
-                            opp_confidence_filled = True
-                            break
-                if opp_confidence_filled:
-                    crm_filled += 1
-                    rep_crm_confidence[rep_name][0] += 1
-                else:
-                    missing_fields.append("Confidence")
 
-            # Field 5: Lost Reason (only for Lost leads)
-            if is_lost:
-                rep_crm_lost_reason[rep_name][1] += 1
-                if is_field_filled(lost_reason):
-                    crm_filled += 1
-                    rep_crm_lost_reason[rep_name][0] += 1
-                else:
-                    missing_fields.append("Lost Reason")
+def week_bounds_pt(now=None):
+    """Monday–Friday week containing `now` (or just-ended week if on Sat/Sun).
 
-            # Track leads with missing fields (include lead_id for hyperlinks)
-            if missing_fields:
-                lead_display = lead.get("display_name", "") or lead.get("name", "") or lead.get("id", "")
-                lead_id = lead.get("id", "")
-                if rep_name not in rep_crm_missing:
-                    rep_crm_missing[rep_name] = []
-                rep_crm_missing[rep_name].append({
-                    "name": lead_display,
-                    "lead_id": lead_id,
-                    "missing": missing_fields,
-                })
+    Returns (week_start_mon_pt, week_end_sat_pt_exclusive, 'YYYY-MM-DD' label = Monday).
+    The exclusive end is Saturday 00:00 PT (so the inclusive last day is Friday).
+    """
+    now = now or now_pt()
+    days_since_monday = now.weekday()   # Mon=0 ... Sun=6
+    week_start = (now - timedelta(days=days_since_monday)).replace(
+        hour=0, minute=0, second=0, microsecond=0
+    )
+    week_end_exclusive = week_start + timedelta(days=5)   # Sat 00:00 PT
+    return week_start, week_end_exclusive, week_start.strftime("%Y-%m-%d")
 
-            rep_crm_filled[rep_name] = rep_crm_filled.get(rep_name, 0) + crm_filled
-            rep_crm_total[rep_name] = rep_crm_total.get(rep_name, 0) + crm_checks
-        elif is_canceled_call:
-            crm_skipped_canceled += 1
-        elif is_reschedule:
-            crm_skipped_reschedule += 1
-        elif not is_past:
-            crm_skipped_future += 1
 
-    print(f"  Excluded: {excluded_status} by lead status, {excluded_user} by user, {excluded_funnel} by funnel", flush=True)
-    print(f"  Qualifying leads: {sum(rep_booked.values())} across {len(rep_booked)} reps", flush=True)
-    if crm_skipped_future:
-        print(f"  ℹ️ CRM compliance skipped for {crm_skipped_future} leads (meeting today, not yet past)", flush=True)
-    if crm_skipped_canceled:
-        print(f"  ℹ️ CRM compliance skipped for {crm_skipped_canceled} leads (canceled disposition)", flush=True)
-    if crm_skipped_reschedule:
-        print(f"  ℹ️ CRM compliance skipped for {crm_skipped_reschedule} leads (reschedule status)", flush=True)
+def business_days_elapsed_wtd(now, week_start, week_end_exclusive):
+    """Count Mon-Fri days from week_start through min(today, Friday) inclusive."""
+    last_day = (week_end_exclusive - timedelta(days=1)).date()   # Friday of the week
+    end_d = min(now.date(), last_day)
+    d = week_start.date()
+    count = 0
+    while d <= end_d:
+        if d.weekday() < 5:
+            count += 1
+        d += timedelta(days=1)
+    return max(count, 1)
 
-    crm_detail = {}
-    for rn in rep_crm_show_up:
-        crm_detail[rn] = {
-            "show_up": rep_crm_show_up[rn],
-            "disposition": rep_crm_disposition[rn],
-            "qualified": rep_crm_qualified[rn],
-            "confidence": rep_crm_confidence[rn],
-            "lost_reason": rep_crm_lost_reason.get(rn, [0, 0]),
-            "missing_leads": rep_crm_missing.get(rn, []),
-        }
 
-    # Sort funnel breakdown by count descending
-    funnel_breakdown = sorted(funnel_counts.items(), key=lambda x: x[1], reverse=True)
-    funnel_breakdown = [{"funnel": f, "count": c} for f, c in funnel_breakdown]
+def prev_n_weeks(week_start, n):
+    """Return list of {start, end_exclusive, label} for the N completed weeks before `week_start`."""
+    out = []
+    for i in range(1, n + 1):
+        ws = week_start - timedelta(weeks=i)
+        we = ws + timedelta(days=5)
+        out.append({"start": ws, "end_exclusive": we, "label": ws.strftime("%Y-%m-%d")})
+    return out
 
-    # Compute in-house vs external vs unknown percentages
-    total_funnel = sum(fc["count"] for fc in funnel_breakdown)
-    in_house = 0
-    external = 0
-    unknown_src = 0
-    for fc in funnel_breakdown:
-        source = FUNNEL_SOURCE.get(fc["funnel"], None)
-        if source == "In-House":
-            in_house += fc["count"]
-        elif source == "External":
-            external += fc["count"]
-        else:
-            unknown_src += fc["count"]
 
-    funnel_sources = {
-        "in_house": in_house,
-        "external": external,
-        "unknown": unknown_src,
-        "in_house_pct": round(in_house / total_funnel * 100, 1) if total_funnel else 0,
-        "external_pct": round(external / total_funnel * 100, 1) if total_funnel else 0,
-        "unknown_pct": round(unknown_src / total_funnel * 100, 1) if total_funnel else 0,
+def format_week_label(week_start, week_end_inclusive):
+    """e.g. 'Jun 8 – 12, 2026' (or cross-month: 'May 27 – Jun 2, 2026')."""
+    same_month = (week_start.month == week_end_inclusive.month
+                   and week_start.year == week_end_inclusive.year)
+    if same_month:
+        return (f"{week_start.strftime('%b')} {week_start.day} – "
+                f"{week_end_inclusive.day}, {week_end_inclusive.year}")
+    return (f"{week_start.strftime('%b')} {week_start.day} – "
+            f"{week_end_inclusive.strftime('%b')} {week_end_inclusive.day}, "
+            f"{week_end_inclusive.year}")
+
+
+# ============================================================================
+# CALENDAR — leads assigned to Lane 2 reps per day
+# ============================================================================
+
+def fetch_calendar(month_start, month_end):
+    """
+    Walks /event/ for object_type=lead, action=updated, since month_start.
+    For each event whose lead-owner custom field changed to a Lane 2 rep AND
+    whose lead is not on the LTF Quiz Funnel, records (lead_id, PT calendar day,
+    new_owner, handraiser). Dedupes per (lead, day) — events come latest-first
+    from Close so the first event we see for a (lead, day) is the most recent
+    assignment of that day; that rep gets credit.
+
+    Returns (counts, breakdowns, per_rep_per_day):
+      counts:          dict[YYYY-MM-DD] -> int       (total leads that day)
+      breakdowns:      dict[YYYY-MM-DD] -> {handraiser: int}
+      per_rep_per_day: dict[YYYY-MM-DD] -> {user_id: int}
+    """
+    print(f"[calendar] scanning lead.updated events "
+          f"{month_start.date()} → {month_end.date()}", flush=True)
+
+    # day_str -> {lead_id: (owner_user_id, handraiser_value)}
+    # We use a dict so we keep only the FIRST (= latest) event per (lead, day).
+    per_day_lead = defaultdict(dict)
+    excluded_funnel_count = 0
+    not_owner_change = 0
+    not_lane2 = 0
+
+    params = {
+        "object_type": "lead",
+        "action": "updated",
+        "date_updated__gte": month_start.astimezone(timezone.utc)
+                                        .strftime("%Y-%m-%dT%H:%M:%SZ"),
     }
 
-    print(f"  Funnel breakdown: {len(funnel_breakdown)} funnels | "
-          f"In-House: {in_house} ({funnel_sources['in_house_pct']}%) | "
-          f"External: {external} ({funnel_sources['external_pct']}%) | "
-          f"Unknown: {unknown_src} ({funnel_sources['unknown_pct']}%)", flush=True)
+    event_count = 0
+    for ev in close_paginate_cursor("/event/", params):
+        event_count += 1
+        if event_count % 1000 == 0:
+            page_count = event_count // 50
+            print(f"  [calendar] scanned {event_count} events "
+                  f"(~{page_count} pages), "
+                  f"{sum(len(d) for d in per_day_lead.values())} qualifying so far",
+                  flush=True)
 
-    return rep_booked, rep_shown, rep_qualified, rep_crm_filled, rep_crm_total, crm_detail, funnel_breakdown, funnel_sources
+        data = ev.get("data") or {}
+        new_owner  = get_custom(data,                   FIELD_LEAD_OWNER)
+        prev_owner = get_custom(ev.get("previous_data"), FIELD_LEAD_OWNER)
 
-
-# ── API helpers ──────────────────────────────────────────────────────────────
-
-session = None
-
-
-def init_session():
-    global session
-    session = requests.Session()
-    session.auth = (CLOSE_API_KEY, "")
-    session.headers.update({"Content-Type": "application/json"})
-
-
-def api_get(endpoint, params=None):
-    url = f"{BASE_URL}{endpoint}"
-    for attempt in range(5):
-        time.sleep(0.5)
-        resp = session.get(url, params=params or {})
-        if resp.status_code == 429:
-            retry_after = int(resp.headers.get("Retry-After", 5))
-            print(f"    Rate limited, waiting {retry_after}s...", flush=True)
-            time.sleep(retry_after)
+        if new_owner == prev_owner:
+            not_owner_change += 1
             continue
-        resp.raise_for_status()
-        return resp.json()
-    raise Exception(f"Failed after 5 retries: {url}")
+        if new_owner not in LANE_2_USER_IDS:
+            not_lane2 += 1
+            continue
+
+        funnel = get_custom(data, FIELD_FUNNEL_NAME)
+        if funnel in EXCLUDED_FUNNELS:
+            excluded_funnel_count += 1
+            continue
+
+        lead_id = ev.get("lead_id") or data.get("id")
+        if not lead_id:
+            continue
+
+        ts = ev.get("date_updated") or ev.get("date_created")
+        if not ts:
+            continue
+        try:
+            dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+        except ValueError:
+            continue
+        pt_date = dt.astimezone(TIMEZONE).date().isoformat()
+
+        # First event we see for a (lead, day) wins (= latest, since events
+        # are ordered date_updated desc by Close).
+        if lead_id in per_day_lead[pt_date]:
+            continue
+
+        handraiser = get_custom(data, FIELD_HANDRAISER) or "(unset)"
+        per_day_lead[pt_date][lead_id] = (new_owner, handraiser)
+
+    print(f"[calendar] scanned {event_count} events total · "
+          f"{not_owner_change} non-owner-change · "
+          f"{not_lane2} non-Lane2 owner · "
+          f"{excluded_funnel_count} LTF excluded",
+          flush=True)
+
+    counts = {}
+    breakdowns = {}
+    per_rep_per_day = {}
+    for day, leads in per_day_lead.items():
+        counts[day] = len(leads)
+        bd = defaultdict(int)
+        rd = defaultdict(int)
+        for owner, hr in leads.values():
+            bd[hr] += 1
+            rd[owner] += 1
+        breakdowns[day] = dict(sorted(
+            bd.items(),
+            key=lambda kv: (kv[0] == "(unset)", -kv[1], kv[0])
+        ))
+        per_rep_per_day[day] = dict(rd)
+
+    print(f"[calendar] days with activity: {len(counts)} · "
+          f"total qualifying leads: {sum(counts.values())}",
+          flush=True)
+    return counts, breakdowns, per_rep_per_day
 
 
-def fetch_org_users():
-    users = {}
-    seen_names = {}  # name -> first user_id (to detect duplicates)
-    skip = 0
-    while True:
-        data = api_get("/user/", {"_skip": skip, "_limit": 100})
-        for u in data.get("data", []):
-            first = u.get("first_name", "")
-            last = u.get("last_name", "")
-            # Normalize: collapse all whitespace types to single space, strip
-            full = " ".join(f"{first} {last}".split())
-            uid = u["id"]
-            users[uid] = full
-            if full in seen_names:
-                print(f"  ⚠️ Duplicate user name: '{full}' — "
-                      f"{seen_names[full]} and {uid}", flush=True)
+# ============================================================================
+# REP DETAILS
+# ============================================================================
+
+def fetch_owned_leads(user_id):
+    """Currently owned leads with handraiser + comm counter, excluding LTF Quiz Funnel."""
+    leads = []
+    q = f'custom.{FIELD_LEAD_OWNER}:"{user_id}"'
+    fields = (
+        f"id,times_communicated,"
+        f"custom.{FIELD_HANDRAISER},"
+        f"custom.{FIELD_FUNNEL_NAME}"
+    )
+    for ld in close_paginate_skip("/lead/", {"query": q, "_fields": fields}):
+        funnel = get_custom(ld, FIELD_FUNNEL_NAME)
+        if funnel in EXCLUDED_FUNNELS:
+            continue
+        leads.append({
+            "id": ld.get("id"),
+            "handraiser": get_custom(ld, FIELD_HANDRAISER),
+            "times_communicated": ld.get("times_communicated") or 0,
+        })
+    return leads
+
+
+def fetch_rep_activities_per_day(user_id, fetch_start):
+    """Per-day buckets for each activity type, plus outbound subsets for calls/emails.
+
+    Paginates ALL 5 activity types from `fetch_start` onward — so the same data
+    serves both MTD and WTD aggregations. SMS/notes/meetings used to use the
+    cheaper close_count, but it paginates internally anyway when total_results
+    is missing, so this is the same cost while giving us per-day granularity
+    for the # Activities total in any time window.
+
+    Returns:
+      {
+        "calls": {day: n},  "calls_outbound": {day: n},
+        "emails": {day: n}, "emails_outbound": {day: n},
+        "sms": {day: n}, "notes": {day: n}, "meetings": {day: n},
+      }
+    """
+    since_iso = fetch_start.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    base = {"user_id": user_id, "date_created__gte": since_iso}
+
+    def _bucket(path, outbound_values=None):
+        all_pd = defaultdict(int)
+        ob_pd = defaultdict(int)
+        for act in close_paginate_skip(path, base):
+            ts = act.get("date_created")
+            if not ts:
+                continue
+            try:
+                dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+                day = dt.astimezone(TIMEZONE).date().isoformat()
+            except ValueError:
+                continue
+            all_pd[day] += 1
+            if outbound_values and (act.get("direction") or "").lower() in outbound_values:
+                ob_pd[day] += 1
+        return dict(all_pd), dict(ob_pd)
+
+    calls_pd,    calls_ob_pd   = _bucket("/activity/call/",    {"outbound"})
+    emails_pd,   emails_ob_pd  = _bucket("/activity/email/",   {"outgoing", "outbound"})
+    sms_pd,      _             = _bucket("/activity/sms/")
+    notes_pd,    _             = _bucket("/activity/note/")
+    meetings_pd, _             = _bucket("/activity/meeting/")
+
+    return {
+        "calls":          calls_pd,
+        "calls_outbound": calls_ob_pd,
+        "emails":         emails_pd,
+        "emails_outbound": emails_ob_pd,
+        "sms":            sms_pd,
+        "notes":          notes_pd,
+        "meetings":       meetings_pd,
+    }
+
+
+def fetch_calls_booked_per_day(user_id, fetch_start, fetch_end_exclusive):
+    """Per-day buckets of `First Sales Call Booked Date` for leads owned by `user_id`,
+    over [fetch_start, fetch_end_exclusive]. LTF excluded. Returns {day: count}.
+    """
+    start_d = fetch_start.date().isoformat()
+    end_d   = (fetch_end_exclusive - timedelta(seconds=1)).date().isoformat()
+    q = (
+        f'custom.{FIELD_LEAD_OWNER}:"{user_id}" '
+        f'custom.{FIELD_FIRST_CALL_BOOKED}>="{start_d}" '
+        f'custom.{FIELD_FIRST_CALL_BOOKED}<="{end_d}"'
+    )
+    per_day = defaultdict(int)
+    for ld in close_paginate_skip("/lead/", {
+        "query": q,
+        "_fields": (
+            f"id,custom.{FIELD_FUNNEL_NAME},"
+            f"custom.{FIELD_FIRST_CALL_BOOKED}"
+        ),
+    }):
+        if get_custom(ld, FIELD_FUNNEL_NAME) in EXCLUDED_FUNNELS:
+            continue
+        booked_date = get_custom(ld, FIELD_FIRST_CALL_BOOKED)
+        if not booked_date:
+            continue
+        per_day[booked_date[:10]] += 1
+    return dict(per_day)
+
+
+def fetch_deals_per_day(user_id, fetch_start, fetch_end_exclusive):
+    """Per-day buckets for won and lost deals for this rep, in PT.
+
+    Won:  server-side date_won filter (works).
+    Lost: paginate all, filter client-side on date_lost (server-side filter is silently ignored).
+    LTF excluded via per-lead funnel lookup (cached).
+    Returns (won_per_day, lost_per_day) as plain dicts.
+    """
+    start_iso = fetch_start.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    end_iso   = fetch_end_exclusive.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    won_records = []   # (lead_id, date_won_str)
+    for opp in close_paginate_skip("/opportunity/", {
+        "user_id": user_id,
+        "status_type": "won",
+        "date_won__gte": start_iso,
+        "date_won__lt":  end_iso,
+        "_fields": "id,lead_id,date_won",
+    }):
+        if opp.get("lead_id") and opp.get("date_won"):
+            won_records.append((opp["lead_id"], opp["date_won"]))
+
+    lost_records = []  # (lead_id, date_lost_str)
+    f_start_utc = fetch_start.astimezone(timezone.utc)
+    f_end_utc   = fetch_end_exclusive.astimezone(timezone.utc)
+    for opp in close_paginate_skip("/opportunity/", {
+        "user_id": user_id,
+        "status_type": "lost",
+        "_fields": "id,lead_id,date_lost",
+    }):
+        date_lost = opp.get("date_lost")
+        if not date_lost:
+            continue
+        try:
+            dt = datetime.fromisoformat(date_lost.replace("Z", "+00:00"))
+        except ValueError:
+            continue
+        if not (f_start_utc <= dt.astimezone(timezone.utc) < f_end_utc):
+            continue
+        if opp.get("lead_id"):
+            lost_records.append((opp["lead_id"], date_lost))
+
+    # LTF exclusion — look up each unique lead's funnel once
+    unique_leads = set(r[0] for r in won_records) | set(r[0] for r in lost_records)
+    funnel_cache = {}
+    for lid in unique_leads:
+        try:
+            ld = close_get(f"/lead/{lid}/",
+                           {"_fields": f"id,custom.{FIELD_FUNNEL_NAME}"})
+            funnel_cache[lid] = get_custom(ld, FIELD_FUNNEL_NAME)
+        except requests.HTTPError:
+            funnel_cache[lid] = None
+
+    def _bucket(records):
+        per_day = defaultdict(int)
+        for lid, date_str in records:
+            if funnel_cache.get(lid) in EXCLUDED_FUNNELS:
+                continue
+            try:
+                dt = datetime.fromisoformat(date_str.replace("Z", "+00:00"))
+            except ValueError:
+                continue
+            per_day[dt.astimezone(TIMEZONE).date().isoformat()] += 1
+        return dict(per_day)
+
+    return _bucket(won_records), _bucket(lost_records)
+
+
+def build_rep_data(rep, fetch_start, fetch_end_exclusive):
+    """Fetch ALL of this rep's data covering [fetch_start, fetch_end_exclusive].
+
+    Returns (snapshot, per_day):
+      snapshot — current-state values (owned_leads, handraiser_breakdown, leads_zero_comms);
+                 same regardless of which period is being viewed.
+      per_day  — flat dict of per-day buckets keyed by metric name:
+                 calls, calls_outbound, emails, emails_outbound, sms, notes, meetings,
+                 calls_booked, deals_won, deals_lost.
+                 Aggregations for MTD / WTD / backfill weeks slice this same dict.
+    """
+    print(f"[rep] {rep['name']}", flush=True)
+    uid = rep["user_id"]
+
+    leads = fetch_owned_leads(uid)
+    handraiser_counts = defaultdict(int)
+    zero_comm = 0
+    for ld in leads:
+        handraiser_counts[ld["handraiser"] or "(unset)"] += 1
+        if ld["times_communicated"] == 0:
+            zero_comm += 1
+    snapshot = {
+        "owned_leads": len(leads),
+        "handraiser_breakdown": dict(sorted(
+            handraiser_counts.items(), key=lambda kv: kv[1], reverse=True
+        )),
+        "leads_zero_comms": zero_comm,
+    }
+
+    act_pd = fetch_rep_activities_per_day(uid, fetch_start)
+    calls_booked_pd = fetch_calls_booked_per_day(uid, fetch_start, fetch_end_exclusive)
+    won_pd, lost_pd = fetch_deals_per_day(uid, fetch_start, fetch_end_exclusive)
+
+    per_day = {
+        **act_pd,                       # calls, calls_outbound, emails, emails_outbound, sms, notes, meetings
+        "calls_booked": calls_booked_pd,
+        "deals_won":    won_pd,
+        "deals_lost":   lost_pd,
+    }
+    return snapshot, per_day
+
+
+def _sum_in_range(per_day_dict, start_date, end_date_exclusive):
+    """Sum values in a per-day dict whose keys fall in [start_date, end_date_exclusive)."""
+    total = 0
+    for day_str, count in (per_day_dict or {}).items():
+        try:
+            d = datetime.strptime(day_str, "%Y-%m-%d").date()
+        except ValueError:
+            continue
+        if start_date <= d < end_date_exclusive:
+            total += count
+    return total
+
+
+def aggregate_rep_for_period(per_day, start_pt, end_exclusive_pt, biz_days):
+    """Aggregate a rep's per-day data into period totals."""
+    s, e = start_pt.date(), end_exclusive_pt.date()
+    calls    = _sum_in_range(per_day.get("calls"),    s, e)
+    emails   = _sum_in_range(per_day.get("emails"),   s, e)
+    sms      = _sum_in_range(per_day.get("sms"),      s, e)
+    notes    = _sum_in_range(per_day.get("notes"),    s, e)
+    meetings = _sum_in_range(per_day.get("meetings"), s, e)
+    ob_calls  = _sum_in_range(per_day.get("calls_outbound"),  s, e)
+    ob_emails = _sum_in_range(per_day.get("emails_outbound"), s, e)
+    return {
+        "activities":      calls + emails + sms + notes + meetings,
+        "outbound_calls":  ob_calls,
+        "outbound_emails": ob_emails,
+        "outbound_calls_per_day_avg":  round(ob_calls  / max(biz_days, 1), 1),
+        "outbound_emails_per_day_avg": round(ob_emails / max(biz_days, 1), 1),
+        "calls_booked":  _sum_in_range(per_day.get("calls_booked"), s, e),
+        "deals_closed":  _sum_in_range(per_day.get("deals_won"),    s, e),
+        "deals_lost":    _sum_in_range(per_day.get("deals_lost"),   s, e),
+    }
+
+
+# ============================================================================
+# SCRAPERS (setters)
+# ============================================================================
+
+def fetch_scraper_activities_per_day(user_id, fetch_start):
+    """Outbound-only activities for this scraper from fetch_start onward.
+
+    Per spec, voicemails are NOT counted — the underlying call activity already
+    accounts for the contact attempt.
+
+    Returns:
+      {
+        "outbound_calls":  {day: n},
+        "outbound_emails": {day: n},
+        "outbound_sms":    {day: n},
+      }
+    """
+    since_iso = fetch_start.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    base = {"user_id": user_id, "date_created__gte": since_iso}
+
+    def _bucket(path, outbound_values):
+        per_day = defaultdict(int)
+        for act in close_paginate_skip(path, base):
+            if (act.get("direction") or "").lower() not in outbound_values:
+                continue
+            ts = act.get("date_created")
+            if not ts:
+                continue
+            try:
+                dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+                per_day[dt.astimezone(TIMEZONE).date().isoformat()] += 1
+            except ValueError:
+                pass
+        return dict(per_day)
+
+    return {
+        "outbound_calls":  _bucket("/activity/call/",  {"outbound"}),
+        "outbound_emails": _bucket("/activity/email/", {"outgoing", "outbound"}),
+        "outbound_sms":    _bucket("/activity/sms/",   {"outbound", "outgoing"}),
+    }
+
+
+def fetch_scraper_meetings_per_day(setter_value, fetch_start, fetch_end_exclusive):
+    """Per-day buckets for booked / shown meetings credited to a scraper, across
+    [fetch_start, fetch_end_exclusive].
+
+    Booked = leads where Setter Name = scraper AND First Sales Call Booked Date in
+    period AND funnel != LTF. Day = First Sales Call Booked Date.
+    Shown  = of those, First Call Show Up = "Yes".
+
+    Closes / revenue are computed separately via fetch_scraper_closes_per_day, using
+    the close-date attribution model (credit by date_won, not by booking date).
+    """
+    start_d = fetch_start.date().isoformat()
+    end_d   = (fetch_end_exclusive - timedelta(seconds=1)).date().isoformat()
+    q = (
+        f'custom.{FIELD_SETTER_NAME}:"{setter_value}" '
+        f'custom.{FIELD_FIRST_CALL_BOOKED}>="{start_d}" '
+        f'custom.{FIELD_FIRST_CALL_BOOKED}<="{end_d}"'
+    )
+    fields = (
+        f"id,"
+        f"custom.{FIELD_FIRST_CALL_BOOKED},"
+        f"custom.{FIELD_FIRST_CALL_SHOWUP},"
+        f"custom.{FIELD_FUNNEL_NAME}"
+    )
+
+    booked_pd = defaultdict(int)
+    shown_pd  = defaultdict(int)
+
+    for ld in close_paginate_skip("/lead/", {"query": q, "_fields": fields}):
+        if get_custom(ld, FIELD_FUNNEL_NAME) in EXCLUDED_FUNNELS:
+            continue
+        booked_date = get_custom(ld, FIELD_FIRST_CALL_BOOKED)
+        if not booked_date:
+            continue
+        day = booked_date[:10]
+        booked_pd[day] += 1
+
+        show_up = (get_custom(ld, FIELD_FIRST_CALL_SHOWUP) or "").strip().lower()
+        if show_up == "yes":
+            shown_pd[day] += 1
+
+    return {
+        "meetings_booked": dict(booked_pd),
+        "meetings_shown":  dict(shown_pd),
+    }
+
+
+def _lead_has_vqd_by(lead_id, setter_uid, title_prefix):
+    """Does this specific lead have any meeting hosted by `setter_uid` whose title
+    starts with `title_prefix`? Used to classify a closed-won lead as Inbound
+    (setter held the discovery) — checks the lead's full history, not just the
+    fetch window, because a VQD may have happened months before the deal closed.
+
+    Robustness: we query by lead_id ONLY (not combined with user_id) and filter
+    the setter and title client-side. Close's `/activity/meeting/` REST endpoint
+    doesn't reliably intersect the two server-side filters — it can silently
+    drop matches when both are supplied together. Client-side filtering also
+    means we don't need `_fields`, so the full meeting object is available if
+    we ever need more attributes.
+    """
+    for mtg in close_paginate_skip("/activity/meeting/", {
+        "lead_id": lead_id,
+    }):
+        if mtg.get("user_id") != setter_uid:
+            continue
+        if (mtg.get("title") or "").startswith(title_prefix):
+            return True
+    return False
+
+
+def fetch_closes_per_day(scrapers, setters, fetch_start, fetch_end_exclusive):
+    """Close-date attribution for BOTH scraper closes AND setter revenue.
+
+    Single org-wide `/opportunity/` query for the period, then one lead lookup
+    each. For every configured setter we also make one per-lead meeting lookup
+    to check for a Vendingpreneurs Quick Discovery hosted by that setter.
+
+    Classification per lead per setter:
+      - Setter held VQD on this lead (any time) → Inbound
+      - Otherwise, lead's Setter Name field matches this setter's scraper handle → Outbound
+      - Otherwise, no setter credit
+
+    Returns (scraper_closes_by_uid, setter_closes_by_uid) where:
+
+      scraper_closes_by_uid[uid] = {
+        "meetings_closed":         {day: count},
+        "meetings_closed_revenue": {day: dollars},
+        "meetings_closed_leads":   {day: [{lead_id, lead_name, value, won_count}, ...]},
+      }
+
+      setter_closes_by_uid[uid] = {
+        "inbound_revenue":  {day: dollars},
+        "outbound_revenue": {day: dollars},
+        "inbound_leads":    {day: [{lead_id, lead_name, value, won_count}, ...]},
+        "outbound_leads":   {day: [...]},
+      }
+    """
+    scraper_setter_to_uid = {s["setter_field_value"]: s["user_id"] for s in scrapers}
+    setters = setters or []
+
+    start_iso = fetch_start.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    end_iso   = fetch_end_exclusive.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    # 1) Pull every won opp in the period (single org-wide query) and group by lead.
+    leads_to_opps = defaultdict(list)
+    opp_count = 0
+    for opp in close_paginate_skip("/opportunity/", {
+        "status_type":     "won",
+        "date_won__gte":   start_iso,
+        "date_won__lt":    end_iso,
+        "_fields":         "id,lead_id,value,date_won",
+    }):
+        opp_count += 1
+        if opp.get("lead_id") and opp.get("date_won"):
+            leads_to_opps[opp["lead_id"]].append(opp)
+    print(f"  closes-in-period: {opp_count} won opps across {len(leads_to_opps)} unique leads",
+          flush=True)
+
+    scraper_out = {
+        s["user_id"]: {
+            "meetings_closed":         defaultdict(int),
+            "meetings_closed_revenue": defaultdict(float),
+            "meetings_closed_leads":   defaultdict(list),
+        } for s in scrapers
+    }
+    setter_out = {
+        s["user_id"]: {
+            "inbound_revenue":  defaultdict(float),
+            "outbound_revenue": defaultdict(float),
+            "inbound_leads":    defaultdict(list),
+            "outbound_leads":   defaultdict(list),
+        } for s in setters
+    }
+
+    scraper_matched = 0
+    setter_inbound  = 0
+    setter_outbound = 0
+    vqd_hits_by_uid = defaultdict(int)   # per-setter counter of leads where has_vqd=True
+    vqd_miss_by_uid = defaultdict(int)   # per-setter counter of leads where has_vqd=False
+
+    for lead_id, opps in leads_to_opps.items():
+        try:
+            ld = close_get(f"/lead/{lead_id}/", {
+                "_fields": (
+                    "id,display_name,"
+                    f"custom.{FIELD_SETTER_NAME},"
+                    f"custom.{FIELD_FUNNEL_NAME}"
+                )
+            })
+        except requests.HTTPError:
+            continue
+
+        if get_custom(ld, FIELD_FUNNEL_NAME) in EXCLUDED_FUNNELS:
+            continue
+
+        setter_name_val = (get_custom(ld, FIELD_SETTER_NAME) or "").strip()
+        lead_name = ld.get("display_name") or "(unnamed lead)"
+
+        # Group opps under their date_won (PT) once — reused for both attributions.
+        opps_by_day = defaultdict(list)
+        for opp in opps:
+            try:
+                dt = datetime.fromisoformat(opp["date_won"].replace("Z", "+00:00"))
+                day = dt.astimezone(TIMEZONE).date().isoformat()
+                opps_by_day[day].append(opp)
+            except ValueError:
+                continue
+        if not opps_by_day:
+            continue
+
+        # ─ SCRAPER attribution: lead's Setter Name matches a scraper handle ─
+        scraper_uid = scraper_setter_to_uid.get(setter_name_val)
+        if scraper_uid:
+            scraper_matched += 1
+            for day, day_opps in opps_by_day.items():
+                scraper_out[scraper_uid]["meetings_closed"][day] += 1
+                day_value = sum(int(o.get("value") or 0) for o in day_opps) / 100.0
+                scraper_out[scraper_uid]["meetings_closed_revenue"][day] += day_value
+                scraper_out[scraper_uid]["meetings_closed_leads"][day].append({
+                    "lead_id":   lead_id,
+                    "lead_name": lead_name,
+                    "value":     round(day_value, 2),
+                    "won_count": len(day_opps),
+                })
+
+        # ─ SETTER attribution: for each configured setter, classify inbound/outbound ─
+        for setter in setters:
+            setter_uid = setter["user_id"]
+            prefix     = setter["discovery_title_prefix"]
+            scraper_handle = setter.get("scraper_setter_field_value")
+
+            has_vqd = _lead_has_vqd_by(lead_id, setter_uid, prefix)
+            if has_vqd:
+                vqd_hits_by_uid[setter_uid] += 1
             else:
-                seen_names[full] = uid
-        if not data.get("has_more", False):
+                vqd_miss_by_uid[setter_uid] += 1
+
+            if has_vqd:
+                bucket = "inbound"
+            elif scraper_handle and setter_name_val == scraper_handle:
+                bucket = "outbound"
+            else:
+                continue
+
+            for day, day_opps in opps_by_day.items():
+                day_value = sum(int(o.get("value") or 0) for o in day_opps) / 100.0
+                entry = {
+                    "lead_id":   lead_id,
+                    "lead_name": lead_name,
+                    "value":     round(day_value, 2),
+                    "won_count": len(day_opps),
+                }
+                if bucket == "inbound":
+                    setter_out[setter_uid]["inbound_revenue"][day] += day_value
+                    setter_out[setter_uid]["inbound_leads"][day].append(entry)
+                    setter_inbound += 1
+                else:
+                    setter_out[setter_uid]["outbound_revenue"][day] += day_value
+                    setter_out[setter_uid]["outbound_leads"][day].append(entry)
+                    setter_outbound += 1
+
+    print(f"  scraper credit: {scraper_matched} leads matched a scraper Setter Name",
+          flush=True)
+    if setters:
+        print(f"  setter credit:  {setter_inbound} inbound + {setter_outbound} outbound (rows)",
+              flush=True)
+        for s in setters:
+            uid = s["user_id"]
+            in_rev  = sum(setter_out[uid]["inbound_revenue"].values())
+            out_rev = sum(setter_out[uid]["outbound_revenue"].values())
+            print(f"    {s['name']}: VQD hits={vqd_hits_by_uid[uid]} misses={vqd_miss_by_uid[uid]}"
+                  f" · inbound=${in_rev:,.0f} · outbound=${out_rev:,.0f}",
+                  flush=True)
+
+    scraper_result = {
+        uid: {k: dict(v) for k, v in data.items()}
+        for uid, data in scraper_out.items()
+    }
+    setter_result = {
+        uid: {k: dict(v) for k, v in data.items()}
+        for uid, data in setter_out.items()
+    }
+    return scraper_result, setter_result
+
+
+# Backwards-compat shim so any external caller (or future me) that expects the
+# old signature keeps working. Just calls fetch_closes_per_day with no setters
+# and returns the scraper dict.
+def fetch_scraper_closes_per_day(scrapers, fetch_start, fetch_end_exclusive):
+    scraper_result, _ = fetch_closes_per_day(scrapers, [], fetch_start, fetch_end_exclusive)
+    return scraper_result
+
+
+def build_scraper_data(scraper, fetch_start, fetch_end_exclusive):
+    """Fetch ALL scraper data covering [fetch_start, fetch_end_exclusive]. Returns per_day dict.
+    """
+    print(f"[scraper] {scraper['name']}", flush=True)
+    uid = scraper["user_id"]
+    act_pd = fetch_scraper_activities_per_day(uid, fetch_start)
+    mtg_pd = fetch_scraper_meetings_per_day(
+        scraper["setter_field_value"], fetch_start, fetch_end_exclusive
+    )
+    return {**act_pd, **mtg_pd}
+
+
+def fetch_meetings_set_per_day(scrapers, start_pt, end_exclusive_pt):
+    """Per-scraper per-day count of meetings SET (i.e., meetings whose date_created
+    falls in the range).
+
+    Matches the attribution used by the call-capacity dashboard's EOD "Scraper
+    Bookings" section: credited via the LEAD's `Reactivation - Setter Name`
+    field, filtered to `Funnel Name = "Reactivation Scrapers"` only. That excludes
+    William's Vendingpreneurs Quick Discovery meetings, Anthony's inbound calls,
+    etc. — only scraper-flow bookings count here.
+
+    Single org-wide `/activity/meeting/` query + one lead lookup per unique lead
+    (cached). Called with a NARROWER range than the main fetch_start — typically
+    just the ~3 weeks whose archives we're writing on this run — to keep runtime
+    manageable. Older days in existing archives keep whatever value they had
+    (`0` if the metric didn't exist yet, real number if it did).
+
+    Returns:
+      {scraper_user_id: {day: count}}
+    """
+    if not scrapers:
+        return {}
+    setter_to_uid = {s["setter_field_value"]: s["user_id"] for s in scrapers}
+
+    since_iso = start_pt.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    end_iso   = end_exclusive_pt.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    lead_cache = {}   # lead_id -> setter_field_value (or None if not attributed)
+    result = {uid: defaultdict(int) for uid in setter_to_uid.values()}
+
+    total_seen = 0
+    attributed = 0
+    for mtg in close_paginate_skip("/activity/meeting/", {
+        "date_created__gte": since_iso,
+        "date_created__lt":  end_iso,
+    }):
+        total_seen += 1
+        lead_id = mtg.get("lead_id")
+        date_created = mtg.get("date_created")
+        if not lead_id or not date_created:
+            continue
+
+        if lead_id not in lead_cache:
+            try:
+                ld = close_get(f"/lead/{lead_id}/", {
+                    "_fields": (
+                        f"id,custom.{FIELD_SETTER_NAME},"
+                        f"custom.{FIELD_FUNNEL_NAME}"
+                    )
+                })
+                funnel = get_custom(ld, FIELD_FUNNEL_NAME)
+                setter = (get_custom(ld, FIELD_SETTER_NAME) or "").strip()
+                # Only count meetings on Reactivation Scrapers funnel leads
+                # AND where Setter Name matches a configured scraper — mirrors
+                # the call-capacity EOD email's rule.
+                if funnel == "Reactivation Scrapers" and setter in setter_to_uid:
+                    lead_cache[lead_id] = setter
+                else:
+                    lead_cache[lead_id] = None
+            except requests.HTTPError:
+                lead_cache[lead_id] = None
+
+        setter = lead_cache[lead_id]
+        if not setter:
+            continue
+        try:
+            dt = datetime.fromisoformat(date_created.replace("Z", "+00:00"))
+            day = dt.astimezone(TIMEZONE).date().isoformat()
+        except ValueError:
+            continue
+        result[setter_to_uid[setter]][day] += 1
+        attributed += 1
+
+    print(f"  meetings-set: scanned {total_seen} meetings, attributed {attributed} "
+          f"across {len(lead_cache)} unique leads looked up", flush=True)
+    return {uid: dict(days) for uid, days in result.items()}
+
+
+def aggregate_scraper_for_period(per_day, start_pt, end_exclusive_pt):
+    """Aggregate a scraper's per-day data into period totals."""
+    s, e = start_pt.date(), end_exclusive_pt.date()
+    oc = _sum_in_range(per_day.get("outbound_calls"),  s, e)
+    oe = _sum_in_range(per_day.get("outbound_emails"), s, e)
+    os = _sum_in_range(per_day.get("outbound_sms"),    s, e)
+
+    # Flatten closed_leads from in-range days into one list, sorted by value desc
+    closed_leads = []
+    for day_str, leads in (per_day.get("meetings_closed_leads") or {}).items():
+        try:
+            d = datetime.strptime(day_str, "%Y-%m-%d").date()
+        except ValueError:
+            continue
+        if s <= d < e:
+            for ld in (leads or []):
+                closed_leads.append({**ld, "day": day_str})
+    closed_leads.sort(key=lambda r: r.get("value") or 0, reverse=True)
+
+    return {
+        "activities_total": oc + oe + os,
+        "activities_breakdown": {
+            "outbound_calls":  oc,
+            "outbound_emails": oe,
+            "outbound_sms":    os,
+        },
+        "meetings_booked":         _sum_in_range(per_day.get("meetings_booked"),         s, e),
+        "meetings_shown":          _sum_in_range(per_day.get("meetings_shown"),          s, e),
+        "meetings_closed":         _sum_in_range(per_day.get("meetings_closed"),         s, e),
+        "meetings_closed_revenue": _sum_in_range(per_day.get("meetings_closed_revenue"), s, e),
+        "meetings_closed_leads":   closed_leads,
+    }
+
+
+# ─ Setter discovery meetings ─────────────────────────────────────────────────
+
+def _meeting_shown(meeting, host_user_id):
+    """A discovery meeting is "shown" iff:
+       - the meeting status is NOT canceled, AND
+       - the host's attendee entry is NOT "declined"
+    A no-show in this workflow surfaces as either (a) William declining the
+    invite from his calendar (the Calendly→Close integration syncs that back
+    as a declined attendee status), or (b) the meeting being canceled outright.
+    """
+    status = (meeting.get("status") or "").lower()
+    if status in ("canceled", "cancelled", "no-show"):
+        return False
+    for att in (meeting.get("attendees") or []):
+        # Match by user_id (internal attendee) — anonymous external attendees
+        # don't have user_id populated.
+        if att.get("user_id") == host_user_id:
+            if (att.get("attendance_status") or "").lower() == "declined":
+                return False
             break
-        skip += 100
-    return users
-
-
-def resolve_owner(raw_owner, user_map, name_to_id):
-    if not raw_owner:
-        return "Unknown"
-    if isinstance(raw_owner, dict):
-        uid = raw_owner.get("id", "")
-        if uid in user_map:
-            return user_map[uid]
-        name = raw_owner.get("name", "Unknown")
-        return " ".join(name.split()) if name else "Unknown"
-    owner_str = " ".join(str(raw_owner).split())  # normalize whitespace
-    if owner_str in user_map:
-        return user_map[owner_str]
-    if owner_str in name_to_id:
-        return owner_str
-    return owner_str if owner_str else "Unknown"
-
-
-def safe_pct(num, den):
-    if not den:
-        return None
-    return round(num / den * 100, 1)
-
-
-def is_field_filled(value):
-    if value is None:
-        return False
-    if isinstance(value, str) and value.strip() == "":
-        return False
     return True
 
 
-# ── Week helpers ─────────────────────────────────────────────────────────────
+def fetch_setter_discovery_per_day(setter, fetch_start, fetch_end_exclusive):
+    """Per-day buckets of discovery meetings this setter hosts.
 
-def get_week_range(now_pst):
-    """Get Monday through today (PST) as date strings."""
-    today = now_pst.date()
-    # Monday = 0, so weekday() gives days since Monday
-    monday = today - timedelta(days=today.weekday())
-    dates = []
-    d = monday
-    while d <= today:
-        dates.append(d.strftime("%Y-%m-%d"))
-        d += timedelta(days=1)
-    return monday.strftime("%Y-%m-%d"), today.strftime("%Y-%m-%d"), dates
+    A "discovery meeting" = an /activity/meeting/ activity where:
+      - user_id == setter's user_id (this person hosts the call), AND
+      - title.startswith(setter['discovery_title_prefix']) (e.g. "Vendingpreneurs Quick Discovery")
 
+    Day = the meeting's `starts_at` (when it happened), bucketed in PT.
+    `discovery_shown` is the subset that was not declined/canceled.
 
-# ── Step 2: Fetch Closed/Won opps for the week ──────────────────────────────
-
-def fetch_closed_won_week(monday_str, today_str):
-    all_opps = []
-    skip = 0
-    while True:
-        data = api_get("/opportunity/", {
-            "status_id": CLOSED_WON_STATUS_ID,
-            "date_won__gte": monday_str,
-            "date_won__lte": today_str,
-            "_skip": skip,
-            "_limit": 100,
-        })
-        opps = data.get("data", [])
-        all_opps.extend(opps)
-        if not data.get("has_more", False):
-            break
-        skip += 100
-    return [o for o in all_opps if o.get("pipeline_id") == PIPELINE_ID]
-
-
-# ── Step 3: Fetch task adherence per rep ─────────────────────────────────────
-
-def fetch_task_adherence(user_map, today_str):
-    """For each non-manager rep, fetch incomplete tasks and calculate adherence.
-
-    Adherence = % of incomplete tasks that are NOT overdue.
-    A rep with 0 incomplete tasks = 100% (fully caught up).
-    Overdue = incomplete task where date < today.
-
-    Tasks on leads with a Closed/Won opp in the Sales Pipeline are excluded
-    entirely — reps shouldn't be penalized for old tasks on closed deals.
-
-    Uses GET /task/?assigned_to={user_id}&is_complete=false
+    Returns:
+      {
+        "discovery_held":  {day: int},
+        "discovery_shown": {day: int},
+      }
     """
-    rep_adherence = {}
-    rep_overdue = {}
-    rep_total_incomplete = {}
+    uid = setter["user_id"]
+    prefix = setter["discovery_title_prefix"]
+    since_iso = fetch_start.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    end_iso   = fetch_end_exclusive.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
-    name_to_id = {v: k for k, v in user_map.items()}
+    held_pd  = defaultdict(int)
+    shown_pd = defaultdict(int)
+    seen = 0
 
-    # Only check reps in REP_QUOTAS — skip non-sales org users
-    active_reps = {name: uid for name, uid in name_to_id.items()
-                   if name in REP_QUOTAS and name not in EXCLUDE_USERS and name not in MANAGER_USERS}
-
-    # Cache lead lookups — many tasks may share the same lead
-    lead_won_cache = {}  # lead_id -> bool (True if has Closed/Won opp)
-    won_tasks_skipped = 0
-
-    def is_lead_closed_won(lead_id):
-        if not lead_id:
-            return False
-        if lead_id in lead_won_cache:
-            return lead_won_cache[lead_id]
-        try:
-            lead = api_get(f"/lead/{lead_id}/", {"_fields": "id,opportunities"})
-            for opp in lead.get("opportunities", []):
-                if opp.get("pipeline_id") == PIPELINE_ID and \
-                   opp.get("status_id") == CLOSED_WON_STATUS_ID:
-                    lead_won_cache[lead_id] = True
-                    return True
-            lead_won_cache[lead_id] = False
-            return False
-        except Exception:
-            lead_won_cache[lead_id] = False
-            return False
-
-    for rep_name, user_id in active_reps.items():
-
-        try:
-            # Fetch all incomplete tasks for this rep
-            all_incomplete = []
-            skip = 0
-            while True:
-                data = api_get("/task/", {
-                    "assigned_to": user_id,
-                    "is_complete": "false",
-                    "_skip": skip,
-                    "_limit": 200,
-                })
-                tasks = data.get("data", [])
-                all_incomplete.extend(tasks)
-                if not data.get("has_more", False):
-                    break
-                skip += 200
-
-            # Filter out tasks on Closed/Won leads, then count overdue
-            overdue = 0
-            active_tasks = 0
-            for task in all_incomplete:
-                lead_id = task.get("lead_id", "")
-                if is_lead_closed_won(lead_id):
-                    won_tasks_skipped += 1
-                    continue
-                active_tasks += 1
-                task_date = (task.get("date") or "")[:10]
-                if task_date and task_date < today_str:
-                    overdue += 1
-
-            on_time = active_tasks - overdue
-
-            rep_overdue[rep_name] = overdue
-            rep_total_incomplete[rep_name] = active_tasks
-
-            if active_tasks == 0:
-                rep_adherence[rep_name] = 100.0  # fully caught up
-            else:
-                rep_adherence[rep_name] = round(on_time / active_tasks * 100, 1)
-
-        except Exception as e:
-            print(f"    ⚠️ Failed to fetch tasks for {rep_name}: {e}", flush=True)
-
-    total_overdue = sum(rep_overdue.values())
-    total_incomplete = sum(rep_total_incomplete.values())
-    print(f"  Task adherence: {total_incomplete} active tasks, {total_overdue} overdue across {len(rep_adherence)} reps", flush=True)
-    if won_tasks_skipped:
-        print(f"  ℹ️ Excluded {won_tasks_skipped} tasks on Closed/Won leads ({len(lead_won_cache)} leads checked)", flush=True)
-
-    return rep_adherence, rep_overdue, rep_total_incomplete
-
-
-# ── Step 4: Fetch open leads per rep ─────────────────────────────────────────
-
-def fetch_open_leads_per_rep(user_map):
-    """Count qualified open leads per rep.
-    Only counts leads where Qualified (Opp) = Yes AND not Lost/Canceled/Outside US/Closed Won.
-    Also excludes leads with a Closed/Won opp in the Sales Pipeline (stale lead status).
-    Uses Lead Owner custom field for attribution.
-    Returns rep_open_leads dict {rep_name: count}.
-    """
-    name_to_id = {v: k for k, v in user_map.items()}
-    rep_open_leads = {}
-    won_opp_skipped = 0
-
-    # Only check reps in REP_QUOTAS — skip non-sales org users
-    active_reps = {name for name in name_to_id
-                   if name in REP_QUOTAS and name not in EXCLUDE_USERS and name not in MANAGER_USERS}
-
-    for rep_name in active_reps:
-
-        try:
-            count = 0
-            skip = 0
-            while True:
-                data = api_get("/lead/", {
-                    "query": f'"Lead Owner":"{rep_name}" "Qualified (Opp)":"Yes"',
-                    "_fields": "id,status_id,opportunities",
-                    "_skip": skip,
-                    "_limit": 200,
-                })
-                leads = data.get("data", [])
-                for lead in leads:
-                    # Skip excluded lead statuses
-                    if lead.get("status_id") in CLOSED_LEAD_STATUSES:
-                        continue
-                    # Skip leads with a Closed/Won opp (even if lead status is stale)
-                    has_won_opp = False
-                    for opp in lead.get("opportunities", []):
-                        if opp.get("pipeline_id") == PIPELINE_ID and \
-                           opp.get("status_id") == CLOSED_WON_STATUS_ID:
-                            has_won_opp = True
-                            break
-                    if has_won_opp:
-                        won_opp_skipped += 1
-                        continue
-                    count += 1
-                if not data.get("has_more", False):
-                    break
-                skip += 200
-
-            rep_open_leads[rep_name] = count
-        except Exception as e:
-            print(f"    ⚠️ Failed to fetch open leads for {rep_name}: {e}", flush=True)
-
-    total_open = sum(rep_open_leads.values())
-    print(f"  Qualified pipeline: {total_open} leads across {len(rep_open_leads)} reps", flush=True)
-    if won_opp_skipped:
-        print(f"  ℹ️ Excluded {won_opp_skipped} leads with Closed/Won opp but stale lead status", flush=True)
-    return rep_open_leads
-
-
-# ── Main ─────────────────────────────────────────────────────────────────────
-
-def build_dashboard_data():
-    if not CLOSE_API_KEY:
-        print("ERROR: CLOSE_API_KEY not set.", file=sys.stderr, flush=True)
-        sys.exit(1)
-
-    init_session()
-
-    now_utc = datetime.now(timezone.utc)
-    try:
-        from zoneinfo import ZoneInfo
-        pst = ZoneInfo("America/Los_Angeles")
-    except ImportError:
-        pst = timezone(timedelta(hours=-8))
-    now = now_utc.astimezone(pst)
-    today_str = now.strftime("%Y-%m-%d")
-
-    monday_str, today_str, _ = get_week_range(now)
-    day_of_week = now.date().weekday() + 1  # 1=Mon, 5=Fri
-
-    # Optional: re-run for a specific past week (set RERUN_WEEK=YYYY-MM-DD of Monday)
-    rerun_week = os.environ.get("RERUN_WEEK", "")
-    if rerun_week:
-        from datetime import date as _date
-        rerun_mon = _date.fromisoformat(rerun_week)
-        rerun_sun = rerun_mon + timedelta(days=6)
-        monday_str = rerun_mon.isoformat()
-        today_str = rerun_sun.isoformat()
-        day_of_week = 7  # treat as full week (Mon-Sun)
-        print(f"⚠️ RERUN MODE: overriding week to {monday_str} through {today_str}", flush=True)
-
-    print(f"Fetching WTD data: {monday_str} through {today_str} (day {day_of_week} of week)...", flush=True)
-
-    # Users
-    t0 = time.time()
-    print("  Fetching org users...", flush=True)
-    user_map = fetch_org_users()
-    name_to_id = {v: k for k, v in user_map.items()}
-    print(f"  Found {len(user_map)} users. ({time.time()-t0:.1f}s)", flush=True)
-
-    # Closed/Won opps this week
-    t0 = time.time()
-    print("  Fetching Closed/Won opportunities for the week...", flush=True)
-    opps = fetch_closed_won_week(monday_str, today_str)
-    print(f"  Found {len(opps)} Closed/Won opportunities this week. ({time.time()-t0:.1f}s)", flush=True)
-
-    rep_revenue = {}
-    rep_deals = {}
-    seen_opp_leads = set()
-
-    for opp in opps:
-        user_id = opp.get("user_id")
-        rep_name = user_map.get(user_id, "Unknown")
-        if rep_name in EXCLUDE_USERS:
+    # We extend the filter to date_created__gte=fetch_start because Close's
+    # /activity/meeting/ filters on date_created, not starts_at. Most discovery
+    # meetings are created shortly before they happen so this is fine — we
+    # still bucket by starts_at PT, the date the meeting actually occurred.
+    for mtg in close_paginate_skip("/activity/meeting/", {
+        "user_id":           uid,
+        "date_created__gte": since_iso,
+    }):
+        seen += 1
+        title = (mtg.get("title") or "")
+        if not title.startswith(prefix):
             continue
-        value_dollars = (opp.get("value", 0) or 0) / 100
-        lead_id = opp.get("lead_id", "")
-        rep_revenue[rep_name] = rep_revenue.get(rep_name, 0) + value_dollars
-        lead_key = f"{rep_name}:{lead_id}"
-        if lead_key not in seen_opp_leads:
-            rep_deals[rep_name] = rep_deals.get(rep_name, 0) + 1
-            seen_opp_leads.add(lead_key)
 
-    # Booked meetings: query leads by First Sales Call Booked Date field
-    t0 = time.time()
-    print("  Fetching leads by First Sales Call Booked Date...", flush=True)
-    rep_booked, rep_shown, rep_qualified, rep_crm_filled, rep_crm_total, crm_detail, funnel_breakdown, funnel_sources = \
-        fetch_booked_leads(monday_str, today_str, user_map, name_to_id)
-    print(f"  Booked leads done. ({time.time()-t0:.1f}s)", flush=True)
+        starts_at = mtg.get("starts_at")
+        if not starts_at:
+            continue
+        try:
+            dt = datetime.fromisoformat(starts_at.replace("Z", "+00:00"))
+        except ValueError:
+            continue
+        day_pt = dt.astimezone(TIMEZONE).date()
 
-    # Task adherence (per rep, excludes managers)
-    t0 = time.time()
-    print("  Fetching task adherence per rep...", flush=True)
-    rep_adherence, rep_overdue, rep_total_incomplete = fetch_task_adherence(user_map, today_str)
-    print(f"  Task adherence done. ({time.time()-t0:.1f}s)", flush=True)
+        # starts_at could be earlier than fetch_start (rare — old meetings
+        # backfilled into the fetch window) or after fetch_end_exclusive
+        # (upcoming meetings). Either is fine — we keep them, and the
+        # period aggregation slices by day at output time.
+        if day_pt < fetch_start.date() or day_pt >= fetch_end_exclusive.date():
+            # Outside the fetch window we care about — skip
+            continue
 
-    # Open leads per rep (excludes managers)
-    t0 = time.time()
-    print("  Fetching open leads per rep...", flush=True)
-    rep_open_leads = fetch_open_leads_per_rep(user_map)
-    print(f"  Open leads done. ({time.time()-t0:.1f}s)", flush=True)
+        day = day_pt.isoformat()
+        held_pd[day]  += 1
+        if _meeting_shown(mtg, uid):
+            shown_pd[day] += 1
 
-    # Build per-rep data
-    all_rep_names = set()
-    all_rep_names.update(rep_revenue.keys())
-    all_rep_names.update(rep_booked.keys())
-    all_rep_names.update(REP_QUOTAS.keys())
-    all_rep_names -= EXCLUDE_USERS
-
-    # Debug: check for near-duplicate names
-    name_list = sorted(all_rep_names)
-    print(f"  Building data for {len(name_list)} reps: {name_list}", flush=True)
-
-    reps = []
-    for name in all_rep_names:
-        revenue = rep_revenue.get(name, 0)
-        deals = rep_deals.get(name, 0)
-        booked = rep_booked.get(name, 0)
-        shown = rep_shown.get(name, 0)
-        qualified = rep_qualified.get(name, 0)
-        crm_filled = rep_crm_filled.get(name, 0)
-        crm_total = rep_crm_total.get(name, 0)
-        avg_rev = round(revenue / deals, 2) if deals > 0 else None
-        is_mgr = name in MANAGER_USERS
-        is_lead = name in LEAD_USERS
-        lane = 2 if name in LANE_2_REPS else 1
-
-        reps.append({
-            "name": name,
-            "booked": booked,
-            "shown": shown,
-            "qualified": qualified,
-            "deals": deals,
-            "revenue": round(revenue, 2),
-            "close_rate": safe_pct(deals, booked),
-            "qa_score": None,
-            "avg_rev_per_deal": avg_rev,
-            "crm_compliance": safe_pct(crm_filled, crm_total),
-            "crm_filled": crm_filled,
-            "crm_total": crm_total,
-            "crm_detail": crm_detail.get(name, None),
-            "task_adherence": rep_adherence.get(name) if not is_mgr else None,
-            "tasks_overdue": rep_overdue.get(name, 0) if not is_mgr else None,
-            "tasks_incomplete": rep_total_incomplete.get(name, 0) if not is_mgr else None,
-            "open_leads": rep_open_leads.get(name, 0) if not is_mgr else None,
-            "est_pipeline": round(rep_open_leads.get(name, 0) * AVG_DEAL_VALUE * CLOSE_RATE_ESTIMATE) if not is_mgr else None,
-            "is_manager": is_mgr,
-            "is_lead": is_lead,
-            "lane": lane,
-        })
-
-    reps.sort(key=lambda r: r["booked"], reverse=True)
-
-    # Team totals — manager excluded from CRM/tasks,
-    # but included for booked/shown/qualified/revenue/deals (counts toward team volume)
-    non_mgr = [r for r in reps if not r["is_manager"]]
-    num_reps = len(non_mgr)
-
-    # Booked/shown/qualified include everyone (manager takes calls that count)
-    total_booked = sum(r["booked"] for r in reps)
-    total_shown = sum(r["shown"] for r in reps)
-    total_qualified = sum(r["qualified"] for r in reps)
-
-    # CRM still excludes manager
-    total_crm_filled = sum(r["crm_filled"] for r in non_mgr)
-    total_crm_total = sum(r["crm_total"] for r in non_mgr)
-
-    # Task adherence totals (non-manager)
-    total_overdue = sum(r.get("tasks_overdue", 0) or 0 for r in non_mgr)
-    total_incomplete = sum(r.get("tasks_incomplete", 0) or 0 for r in non_mgr)
-    if total_incomplete == 0:
-        team_task_adherence = 100.0
-    else:
-        team_task_adherence = round((total_incomplete - total_overdue) / total_incomplete * 100, 1)
-
-    # Revenue and deals include everyone (including manager)
-    total_deals = sum(r["deals"] for r in reps)
-    total_revenue = sum(r["revenue"] for r in reps)
-    total_avg_rev = round(total_revenue / total_deals, 2) if total_deals > 0 else None
-
-    # Open leads and pipeline (non-manager)
-    total_open_leads = sum(r.get("open_leads", 0) or 0 for r in non_mgr)
-    total_est_pipeline = round(total_open_leads * AVG_DEAL_VALUE * CLOSE_RATE_ESTIMATE)
-
-    # Team targets = individual target × number of non-manager reps
-    team_targets = {
-        "booked": WEEKLY_TARGETS["booked"] * num_reps,
-        "shown": WEEKLY_TARGETS["shown"] * num_reps,
-        "qualified": WEEKLY_TARGETS["qualified"] * num_reps,
-        "deals": WEEKLY_TARGETS["deals"] * num_reps,
-        "revenue": WEEKLY_TARGETS["revenue"] * num_reps,
-        "close_rate": WEEKLY_TARGETS["close_rate"],
-        "avg_rev_per_deal": WEEKLY_TARGETS["avg_rev_per_deal"],
-        "crm_compliance": WEEKLY_TARGETS["crm_compliance"],
-        "task_adherence": WEEKLY_TARGETS["task_adherence"],
-    }
-
-    # Week label: "Jun 29 – Jul 5, 2026" (Mon-Sun)
-    mon_dt = datetime.strptime(monday_str, "%Y-%m-%d")
-    sun_dt = mon_dt + timedelta(days=6)
-    week_label = f"{mon_dt.strftime('%b %d')} – {sun_dt.strftime('%b %d, %Y')}"
+    print(f"  setter {setter['name']}: {sum(held_pd.values())} held, "
+          f"{sum(shown_pd.values())} shown (scanned {seen} meetings)",
+          flush=True)
 
     return {
-        "updated_at": now.strftime("%Y-%m-%d %I:%M %p %Z"),
-        "week_label": week_label,
-        "monday_str": monday_str,
-        "today_str": today_str,
-        "day_of_week": day_of_week,
-        "num_reps": num_reps,
-        "targets": WEEKLY_TARGETS,
-        "lane_2_targets": LANE_2_TARGETS,
-        "team_targets": team_targets,
-        "total_booked": total_booked,
-        "total_shown": total_shown,
-        "total_qualified": total_qualified,
-        "total_deals": total_deals,
-        "total_revenue": round(total_revenue, 2),
-        "team_close_rate": safe_pct(total_deals, total_booked),
-        "team_avg_rev_per_deal": total_avg_rev,
-        "team_crm_compliance": safe_pct(total_crm_filled, total_crm_total),
-        "team_task_adherence": team_task_adherence,
-        "team_overdue": total_overdue,
-        "team_open_leads": total_open_leads,
-        "team_est_pipeline": total_est_pipeline,
-        "funnel_breakdown": funnel_breakdown,
-        "funnel_sources": funnel_sources,
-        "reps": reps,
+        "discovery_held":  dict(held_pd),
+        "discovery_shown": dict(shown_pd),
     }
+
+
+def aggregate_setter_for_period(per_day, start_pt, end_exclusive_pt,
+                                  scraper_per_day=None):
+    """Aggregate a setter's per-day data into period totals.
+
+    `scraper_per_day` lets us pull "Discovery Set" from the matching scraper's
+    meetings_booked bucket — same setter, same booking event, no second API call.
+    Inbound / Outbound revenue come from the setter's own per_day buckets that
+    were populated by fetch_closes_per_day.
+    """
+    s, e = start_pt.date(), end_exclusive_pt.date()
+    held  = _sum_in_range(per_day.get("discovery_held"),  s, e)
+    shown = _sum_in_range(per_day.get("discovery_shown"), s, e)
+    set_count = 0
+    if scraper_per_day:
+        set_count = _sum_in_range(scraper_per_day.get("meetings_booked"), s, e)
+    show_pct = round(100.0 * shown / held, 1) if held else 0.0
+
+    # Inbound / Outbound revenue + lead lists (sliced to period, sorted by value desc)
+    inbound_revenue  = _sum_in_range(per_day.get("inbound_revenue"),  s, e)
+    outbound_revenue = _sum_in_range(per_day.get("outbound_revenue"), s, e)
+
+    def _flatten_leads(day_dict):
+        out = []
+        for day_str, leads in (day_dict or {}).items():
+            try:
+                d = datetime.strptime(day_str, "%Y-%m-%d").date()
+            except ValueError:
+                continue
+            if s <= d < e:
+                for ld in (leads or []):
+                    out.append({**ld, "day": day_str})
+        out.sort(key=lambda r: r.get("value") or 0, reverse=True)
+        return out
+
+    return {
+        "discovery_held":   held,
+        "discovery_shown":  shown,
+        "discovery_set":    set_count,
+        "show_pct":         show_pct,
+        "inbound_revenue":  round(inbound_revenue,  2),
+        "outbound_revenue": round(outbound_revenue, 2),
+        "inbound_leads":    _flatten_leads(per_day.get("inbound_leads")),
+        "outbound_leads":   _flatten_leads(per_day.get("outbound_leads")),
+    }
+
+
+# ============================================================================
+# MAIN
+# ============================================================================
+
+def _slice_dict_by_date(d, start_date, end_exclusive_date):
+    """Return a copy of `d` keyed by YYYY-MM-DD whose keys fall in [start, end_exclusive)."""
+    out = {}
+    for k, v in (d or {}).items():
+        try:
+            dd = datetime.strptime(k, "%Y-%m-%d").date()
+        except ValueError:
+            continue
+        if start_date <= dd < end_exclusive_date:
+            out[k] = v
+    return out
+
+
+def _build_daily_breakdowns(rep_meta, rep_per_day_by_uid, calendar_per_rep_per_day,
+                             start_pt, end_exclusive_pt):
+    """Build the {day: {user_id: {name, new_leads, outbound_calls, outbound_emails,
+                                   calls_booked, deals_closed}}} structure that powers
+       the rep-view click drill-down, for the given date range."""
+    s, e = start_pt.date(), end_exclusive_pt.date()
+    out = {}
+    for meta in rep_meta:
+        uid = meta["user_id"]
+        pd = rep_per_day_by_uid.get(uid, {})
+        # Days where this rep had any activity in the period
+        candidate_days = (
+            set(pd.get("calls_outbound", {})) |
+            set(pd.get("emails_outbound", {})) |
+            set(pd.get("calls_booked", {})) |
+            set(pd.get("deals_won", {}))
+        )
+        for day, by_rep in calendar_per_rep_per_day.items():
+            if by_rep.get(uid):
+                candidate_days.add(day)
+        for day in candidate_days:
+            try:
+                dd = datetime.strptime(day, "%Y-%m-%d").date()
+            except ValueError:
+                continue
+            if not (s <= dd < e):
+                continue
+            row = {
+                "new_leads":       calendar_per_rep_per_day.get(day, {}).get(uid, 0),
+                "outbound_calls":  pd.get("calls_outbound",  {}).get(day, 0),
+                "outbound_emails": pd.get("emails_outbound", {}).get(day, 0),
+                "calls_booked":    pd.get("calls_booked",    {}).get(day, 0),
+                "deals_closed":    pd.get("deals_won",       {}).get(day, 0),
+            }
+            if any(row.values()):
+                out.setdefault(day, {})[uid] = {"name": meta["name"], **row}
+    return out
+
+
+def _build_scraper_daily_breakdowns(scraper_meta, scraper_per_day_by_uid,
+                                     start_pt, end_exclusive_pt):
+    s, e = start_pt.date(), end_exclusive_pt.date()
+    out = {}
+    for meta in scraper_meta:
+        uid = meta["user_id"]
+        pd = scraper_per_day_by_uid.get(uid, {})
+        days = (
+            set(pd.get("meetings_booked", {})) |
+            set(pd.get("meetings_shown",  {})) |
+            set(pd.get("meetings_closed", {})) |
+            set(pd.get("meetings_set",    {})) |
+            set(pd.get("outbound_calls",  {})) |
+            set(pd.get("outbound_emails", {})) |
+            set(pd.get("outbound_sms",    {}))
+        )
+        for day in days:
+            try:
+                dd = datetime.strptime(day, "%Y-%m-%d").date()
+            except ValueError:
+                continue
+            if not (s <= dd < e):
+                continue
+            row = {
+                "meetings_set":    pd.get("meetings_set",    {}).get(day, 0),
+                "meetings_booked": pd.get("meetings_booked", {}).get(day, 0),
+                "meetings_shown":  pd.get("meetings_shown",  {}).get(day, 0),
+                "meetings_closed": pd.get("meetings_closed", {}).get(day, 0),
+                "outbound_calls":  pd.get("outbound_calls",  {}).get(day, 0),
+                "outbound_emails": pd.get("outbound_emails", {}).get(day, 0),
+                "outbound_sms":    pd.get("outbound_sms",    {}).get(day, 0),
+            }
+            if any(row.values()):
+                out.setdefault(day, {})[uid] = {"name": meta["name"], **row}
+    return out
+
+
+def _build_scraper_calendar(scraper_meta, scraper_per_day_by_uid,
+                             start_pt, end_exclusive_pt, fill_days):
+    """Returns (calendar_counts {day: total_meetings_booked},
+                breakdowns {day: {scraper_name: count}}),
+       backfilled so every day in `fill_days` is present (zero if no bookings)."""
+    s, e = start_pt.date(), end_exclusive_pt.date()
+    counts = {d: 0 for d in fill_days}
+    breakdowns = defaultdict(dict)
+    for meta in scraper_meta:
+        uid = meta["user_id"]
+        booked_pd = scraper_per_day_by_uid.get(uid, {}).get("meetings_booked", {})
+        for day, n in booked_pd.items():
+            if not n:
+                continue
+            try:
+                dd = datetime.strptime(day, "%Y-%m-%d").date()
+            except ValueError:
+                continue
+            if not (s <= dd < e):
+                continue
+            counts[day] = counts.get(day, 0) + n
+            breakdowns[day][meta["name"]] = n
+    return counts, dict(breakdowns)
+
+
+def _build_rep_view(rep_meta, rep_per_day_by_uid, start_pt, end_exclusive_pt, biz_days,
+                     legacy_suffix="_mtd"):
+    """Build the `reps` array for an output file. legacy_suffix is "_mtd" for both
+    the live data.json and archives — the HTML already reads those names, and using
+    them for weekly archives too means the rep-details renderer works unchanged.
+    """
+    out = []
+    for meta in rep_meta:
+        uid = meta["user_id"]
+        pd = rep_per_day_by_uid.get(uid, {})
+        agg = aggregate_rep_for_period(pd, start_pt, end_exclusive_pt, biz_days)
+        out.append({
+            **meta,
+            f"activities{legacy_suffix}":      agg["activities"],
+            f"outbound_calls{legacy_suffix}":  agg["outbound_calls"],
+            f"outbound_emails{legacy_suffix}": agg["outbound_emails"],
+            "outbound_calls_per_day_avg":      agg["outbound_calls_per_day_avg"],
+            "outbound_emails_per_day_avg":     agg["outbound_emails_per_day_avg"],
+            f"calls_booked{legacy_suffix}":    agg["calls_booked"],
+            f"deals_closed{legacy_suffix}":    agg["deals_closed"],
+            f"deals_lost{legacy_suffix}":      agg["deals_lost"],
+        })
+    out.sort(key=lambda x: x["owned_leads"], reverse=True)
+    return out
+
+
+def _build_scraper_view(scraper_meta, scraper_per_day_by_uid, start_pt, end_exclusive_pt):
+    out = []
+    for meta in scraper_meta:
+        uid = meta["user_id"]
+        pd = scraper_per_day_by_uid.get(uid, {})
+        agg = aggregate_scraper_for_period(pd, start_pt, end_exclusive_pt)
+        out.append({
+            **meta,
+            "activities_mtd_total":          agg["activities_total"],
+            "activities_breakdown":          agg["activities_breakdown"],
+            "meetings_booked_mtd":           agg["meetings_booked"],
+            "meetings_shown_mtd":            agg["meetings_shown"],
+            "meetings_closed_ever":          agg["meetings_closed"],
+            "meetings_closed_revenue_ever":  round(agg["meetings_closed_revenue"], 2),
+            "meetings_closed_leads":         agg["meetings_closed_leads"],
+        })
+    out.sort(key=lambda x: x["meetings_booked_mtd"], reverse=True)
+    return out
+
+
+def _mon_to_fri(week_start):
+    """Returns the 5 Mon-Fri ISO date strings for a week starting `week_start`."""
+    return [(week_start + timedelta(days=i)).date().isoformat() for i in range(5)]
+
+
+def _update_archives_index(archives_dir):
+    """Rewrite archives/index.json listing all months + weeks present."""
+    months = sorted(
+        [f.stem.removeprefix("data_") for f in archives_dir.glob("data_*.json")],
+        reverse=True,
+    )
+    weeks = sorted(
+        [f.stem.removeprefix("week_") for f in archives_dir.glob("week_*.json")],
+        reverse=True,
+    )
+    # Attach human-readable labels for the picker
+    def _week_label(ws_iso):
+        try:
+            ws = datetime.strptime(ws_iso, "%Y-%m-%d")
+            we = ws + timedelta(days=4)
+            return format_week_label(ws, we)
+        except ValueError:
+            return ws_iso
+
+    def _month_label(m_iso):
+        try:
+            return datetime.strptime(m_iso, "%Y-%m").strftime("%B %Y")
+        except ValueError:
+            return m_iso
+
+    index = {
+        "months": [{"key": m, "label": _month_label(m)} for m in months],
+        "weeks":  [{"key": w, "label": _week_label(w)}  for w in weeks],
+    }
+    (archives_dir / "index.json").write_text(json.dumps(index, indent=2))
+    print(f"wrote {archives_dir / 'index.json'} "
+          f"(months={len(months)}, weeks={len(weeks)})", flush=True)
+
+
+def main():
+    started = time.time()
+
+    # ─ Backfill mode ──────────────────────────────────────────────────────
+    # If the workflow was dispatched with BACKFILL_MONTH=YYYY-MM, pretend `now`
+    # is the last day of that month so the whole month falls into the fetch
+    # range. We rewrite that month's archives (monthly + every Mon-Fri weekly
+    # archive in it) but skip data.json so the live dashboard stays current.
+    backfill_month_env = os.environ.get("BACKFILL_MONTH", "").strip()
+    if backfill_month_env:
+        try:
+            year, month = map(int, backfill_month_env.split("-"))
+            assert 1 <= month <= 12
+        except (ValueError, AssertionError):
+            raise ValueError(
+                f"BACKFILL_MONTH must be YYYY-MM (got {backfill_month_env!r})"
+            )
+        first_of_next = (datetime(year + 1, 1, 1, tzinfo=TIMEZONE)
+                         if month == 12
+                         else datetime(year, month + 1, 1, tzinfo=TIMEZONE))
+        now = (first_of_next - timedelta(days=1)).replace(
+            hour=12, minute=0, second=0, microsecond=0
+        )
+        print(f"⚙ BACKFILL MODE — target month: {backfill_month_env}", flush=True)
+        print(f"  effective now = {now.isoformat()}", flush=True)
+        print(f"  will rewrite archives/data_{backfill_month_env}.json + every "
+              f"Mon-Fri week whose Monday is in this month", flush=True)
+        print(f"  live data.json will NOT be touched\n", flush=True)
+    else:
+        now = now_pt()
+
+    month_start, month_end, month_label = month_bounds(now)
+    week_start, week_end_excl, week_iso = week_bounds_pt(now)
+    biz_days_mtd = business_days_elapsed(now)
+    biz_days_wtd = business_days_elapsed_wtd(now, week_start, week_end_excl)
+
+    # Backfill the previous 2 completed weeks (per spec). Extend fetch range
+    # back to the earliest needed Monday so all per-day data is captured in
+    # one pass.
+    backfill_weeks = prev_n_weeks(week_start, 2)
+    earliest_week = min([week_start] + [bw["start"] for bw in backfill_weeks])
+    fetch_start = min(month_start, earliest_week)
+
+    print(f"Run: {now.isoformat()}", flush=True)
+    print(f"Month: {month_label} ({month_start.date()} → "
+          f"{(month_end - timedelta(days=1)).date()}) biz_days={biz_days_mtd}", flush=True)
+    print(f"Week:  {week_iso} ({week_start.date()} → "
+          f"{(week_end_excl - timedelta(days=1)).date()}) biz_days={biz_days_wtd}", flush=True)
+    print(f"Backfill weeks: {[bw['label'] for bw in backfill_weeks]}", flush=True)
+    print(f"Fetch from: {fetch_start.date()} (covers all of the above)\n", flush=True)
+
+    # ─ Calendar (lead.updated events) ─────────────────────────────────────
+    cal_counts_all, cal_breakdowns_all, cal_per_rep_per_day_all = fetch_calendar(
+        fetch_start, month_end
+    )
+
+    # ─ Per-rep data ───────────────────────────────────────────────────────
+    print("", flush=True)
+    rep_meta = []        # {user_id, name, owned_leads, handraiser_breakdown, leads_zero_comms}
+    rep_per_day_by_uid = {}
+    for rep_cfg in LANE_2_REPS:
+        snap, per_day = build_rep_data(rep_cfg, fetch_start, month_end)
+        rep_meta.append({"user_id": rep_cfg["user_id"],
+                          "name": rep_cfg["name"], **snap})
+        rep_per_day_by_uid[rep_cfg["user_id"]] = per_day
+
+    # ─ Per-scraper data ───────────────────────────────────────────────────
+    print("", flush=True)
+    scraper_meta = []
+    scraper_per_day_by_uid = {}
+    for scr_cfg in SCRAPERS:
+        per_day = build_scraper_data(scr_cfg, fetch_start, month_end)
+        scraper_meta.append({"user_id": scr_cfg["user_id"],
+                              "name": scr_cfg["name"]})
+        scraper_per_day_by_uid[scr_cfg["user_id"]] = per_day
+
+    # Close-date attribution for scraper closes / revenue AND setter Inbound /
+    # Outbound revenue.  Single org-wide opp query + one lead lookup each →
+    # classifies each closed-won lead for both roles in one pass.
+    print("\n[closes] computing scraper + setter close attribution", flush=True)
+    closes_by_uid, setter_closes_by_uid = fetch_closes_per_day(
+        SCRAPERS, SETTERS, fetch_start, month_end
+    )
+    for uid, closes in closes_by_uid.items():
+        if uid in scraper_per_day_by_uid:
+            scraper_per_day_by_uid[uid].update(closes)
+
+    # ─ Scraper "Meetings Set" (activity metric, per-day) ─────────────────
+    # Meetings whose date_created falls in a given day, credited to the
+    # scraper via the LEAD's Setter Name field and filtered to Reactivation
+    # Scrapers funnel (matches the call-capacity dashboard's convention).
+    #
+    # Scoped narrower than fetch_start on normal runs to keep runtime down —
+    # we only need this data for the archives we're actually writing on this
+    # run (current week + 2 backfill weeks). In backfill mode we cover the
+    # full target month.
+    if backfill_month_env:
+        meetings_set_start = fetch_start
+    else:
+        meetings_set_start = earliest_week
+    print(f"\n[scrapers] fetching meetings-set (activity-based, "
+          f"range {meetings_set_start.date()} → {(month_end - timedelta(days=1)).date()})",
+          flush=True)
+    meetings_set_by_uid = fetch_meetings_set_per_day(
+        SCRAPERS, meetings_set_start, month_end
+    )
+    for uid, days in meetings_set_by_uid.items():
+        if uid in scraper_per_day_by_uid:
+            scraper_per_day_by_uid[uid]["meetings_set"] = days
+
+    # ─ Assemble views for MTD + current WTD ───────────────────────────────
+    reps_mtd     = _build_rep_view(rep_meta, rep_per_day_by_uid,
+                                    month_start, month_end, biz_days_mtd)
+    reps_wtd     = _build_rep_view(rep_meta, rep_per_day_by_uid,
+                                    week_start, week_end_excl, biz_days_wtd)
+    scrapers_mtd = _build_scraper_view(scraper_meta, scraper_per_day_by_uid,
+                                         month_start, month_end)
+    scrapers_wtd = _build_scraper_view(scraper_meta, scraper_per_day_by_uid,
+                                         week_start, week_end_excl)
+
+    # Merge: each rep/scraper has top-level MTD fields + `wtd` sub-block. The
+    # rep snapshots (owned/handraiser/0-comms) live at the top level — they're
+    # "snapshot now" regardless of view, per the locked spec.
+    by_uid_wtd_reps = {r["user_id"]: r for r in reps_wtd}
+    reps_combined = []
+    for r in reps_mtd:
+        w = by_uid_wtd_reps.get(r["user_id"], {})
+        wtd_block = {
+            "activities":                  w.get("activities_mtd", 0),
+            "outbound_calls":              w.get("outbound_calls_mtd", 0),
+            "outbound_emails":             w.get("outbound_emails_mtd", 0),
+            "outbound_calls_per_day_avg":  w.get("outbound_calls_per_day_avg", 0),
+            "outbound_emails_per_day_avg": w.get("outbound_emails_per_day_avg", 0),
+            "calls_booked":                w.get("calls_booked_mtd", 0),
+            "deals_closed":                w.get("deals_closed_mtd", 0),
+            "deals_lost":                  w.get("deals_lost_mtd", 0),
+        }
+        reps_combined.append({**r, "wtd": wtd_block})
+
+    by_uid_wtd_scr = {s["user_id"]: s for s in scrapers_wtd}
+    scrapers_combined = []
+    for s in scrapers_mtd:
+        w = by_uid_wtd_scr.get(s["user_id"], {})
+        wtd_block = {
+            "activities_total":         w.get("activities_mtd_total", 0),
+            "activities_breakdown":     w.get("activities_breakdown", {}),
+            "meetings_booked":          w.get("meetings_booked_mtd", 0),
+            "meetings_shown":           w.get("meetings_shown_mtd", 0),
+            "meetings_closed":          w.get("meetings_closed_ever", 0),
+            "meetings_closed_revenue":  w.get("meetings_closed_revenue_ever", 0),
+            "meetings_closed_leads":    w.get("meetings_closed_leads", []),
+        }
+        scrapers_combined.append({**s, "wtd": wtd_block})
+
+    # ─ Setter discovery meetings ──────────────────────────────────────────
+    # Same person may also hold their own discovery calls. We fetch meeting
+    # activities once (per setter) over the fetch_start range and bucket per-day,
+    # then aggregate for MTD + WTD + each backfill week from the same per-day data.
+    print("\n[setters] fetching discovery meetings", flush=True)
+    setter_per_day_by_uid = {}
+    setter_meta = []
+    for setter_cfg in SETTERS:
+        per_day = fetch_setter_discovery_per_day(setter_cfg, fetch_start, month_end)
+        setter_per_day_by_uid[setter_cfg["user_id"]] = per_day
+        setter_meta.append({"user_id": setter_cfg["user_id"], "name": setter_cfg["name"]})
+
+    # Merge Inbound / Outbound close attribution (computed earlier alongside
+    # scraper closes) into each setter's per_day dict so aggregate_setter_for_period
+    # can slice by period.
+    for uid, closes in setter_closes_by_uid.items():
+        if uid in setter_per_day_by_uid:
+            setter_per_day_by_uid[uid].update(closes)
+
+    def _build_setters_view(start_pt, end_pt):
+        out = []
+        for meta in setter_meta:
+            uid = meta["user_id"]
+            agg = aggregate_setter_for_period(
+                setter_per_day_by_uid.get(uid, {}),
+                start_pt, end_pt,
+                scraper_per_day_by_uid.get(uid),
+            )
+            out.append({**meta, **agg})
+        out.sort(key=lambda x: x["discovery_held"], reverse=True)
+        return out
+
+    setters_mtd = _build_setters_view(month_start, month_end)
+    setters_wtd = _build_setters_view(week_start, week_end_excl)
+    by_uid_setters_wtd = {x["user_id"]: x for x in setters_wtd}
+    setters_combined = []
+    for sm in setters_mtd:
+        w = by_uid_setters_wtd.get(sm["user_id"], {})
+        wtd_block = {
+            "discovery_held":   w.get("discovery_held",   0),
+            "discovery_shown":  w.get("discovery_shown",  0),
+            "discovery_set":    w.get("discovery_set",    0),
+            "show_pct":         w.get("show_pct",         0.0),
+            "inbound_revenue":  w.get("inbound_revenue",  0),
+            "outbound_revenue": w.get("outbound_revenue", 0),
+            "inbound_leads":    w.get("inbound_leads",    []),
+            "outbound_leads":   w.get("outbound_leads",   []),
+        }
+        setters_combined.append({**sm, "wtd": wtd_block})
+
+    # ─ Calendar slicing ───────────────────────────────────────────────────
+    full_month_calendar = {
+        d.isoformat(): cal_counts_all.get(d.isoformat(), 0)
+        for d in days_in_month(month_start, month_end)
+    }
+    month_cal_breakdowns = _slice_dict_by_date(
+        cal_breakdowns_all, month_start.date(), month_end.date()
+    )
+    daily_breakdowns_mtd = _build_daily_breakdowns(
+        rep_meta, rep_per_day_by_uid, cal_per_rep_per_day_all,
+        month_start, month_end
+    )
+
+    week_days = _mon_to_fri(week_start)
+    week_calendar = {d: cal_counts_all.get(d, 0) for d in week_days}
+    week_cal_breakdowns = _slice_dict_by_date(
+        cal_breakdowns_all, week_start.date(), week_end_excl.date()
+    )
+    daily_breakdowns_wtd = _build_daily_breakdowns(
+        rep_meta, rep_per_day_by_uid, cal_per_rep_per_day_all,
+        week_start, week_end_excl
+    )
+
+    month_scraper_calendar, month_scraper_cal_breakdowns = _build_scraper_calendar(
+        scraper_meta, scraper_per_day_by_uid,
+        month_start, month_end,
+        [d.isoformat() for d in days_in_month(month_start, month_end)],
+    )
+    scraper_daily_breakdowns_mtd = _build_scraper_daily_breakdowns(
+        scraper_meta, scraper_per_day_by_uid, month_start, month_end
+    )
+
+    week_scraper_calendar, week_scraper_cal_breakdowns = _build_scraper_calendar(
+        scraper_meta, scraper_per_day_by_uid,
+        week_start, week_end_excl,
+        week_days,
+    )
+    scraper_daily_breakdowns_wtd = _build_scraper_daily_breakdowns(
+        scraper_meta, scraper_per_day_by_uid, week_start, week_end_excl
+    )
+
+    # ─ OUTPUT: data.json (live, has both MTD and WTD) ─────────────────────
+    output = {
+        "generated_at": now.isoformat(),
+        "month": month_label,
+        "month_start": month_start.date().isoformat(),
+        "month_end": (month_end - timedelta(days=1)).date().isoformat(),
+        "today": now.date().isoformat(),
+        "business_days_elapsed": biz_days_mtd,
+        # NEW: week-level metadata + data
+        "week_start": week_start.date().isoformat(),
+        "week_end": (week_end_excl - timedelta(days=1)).date().isoformat(),
+        "week_label": format_week_label(week_start, week_end_excl - timedelta(days=1)),
+        "business_days_elapsed_wtd": biz_days_wtd,
+        # Existing month-level calendar data
+        "calendar": full_month_calendar,
+        "calendar_breakdowns": month_cal_breakdowns,
+        "daily_breakdowns": daily_breakdowns_mtd,
+        "scraper_calendar": month_scraper_calendar,
+        "scraper_calendar_breakdowns": month_scraper_cal_breakdowns,
+        "scraper_daily_breakdowns": scraper_daily_breakdowns_mtd,
+        # NEW: week-level calendar data
+        "week_calendar": week_calendar,
+        "week_calendar_breakdowns": week_cal_breakdowns,
+        "week_daily_breakdowns": daily_breakdowns_wtd,
+        "scraper_week_calendar": week_scraper_calendar,
+        "scraper_week_calendar_breakdowns": week_scraper_cal_breakdowns,
+        "scraper_week_daily_breakdowns": scraper_daily_breakdowns_wtd,
+        # Reps + scrapers (top-level MTD, wtd sub-block)
+        "reps": reps_combined,
+        "scrapers": scrapers_combined,
+        "setters": setters_combined,
+    }
+
+    repo_root = Path(__file__).resolve().parent.parent
+    if not backfill_month_env:
+        (repo_root / "data.json").write_text(json.dumps(output, indent=2))
+        print(f"\nwrote {repo_root / 'data.json'}", flush=True)
+    else:
+        print(f"\n(backfill mode — data.json left untouched)", flush=True)
+
+    archives = repo_root / "archives"
+    archives.mkdir(exist_ok=True)
+
+    # Monthly archive — same shape as data.json (so the live HTML can also
+    # render a historical month archive without code changes).
+    monthly_archive = archives / f"data_{month_label}.json"
+    monthly_archive.write_text(json.dumps(output, indent=2))
+    print(f"wrote {monthly_archive}", flush=True)
+
+    # ─ Weekly archives: current week + backfill ───────────────────────────
+    def _write_week_archive(ws, we_excl, label, biz_days):
+        """A week-shaped file: top-level fields hold THAT week's data (no `wtd`
+        nesting). Field names keep their `_mtd`/`_ever` suffixes so the existing
+        HTML renderer reads them unchanged."""
+        wdays = _mon_to_fri(ws)
+        cal = {d: cal_counts_all.get(d, 0) for d in wdays}
+        cal_bd = _slice_dict_by_date(cal_breakdowns_all, ws.date(), we_excl.date())
+        daily_bd = _build_daily_breakdowns(
+            rep_meta, rep_per_day_by_uid, cal_per_rep_per_day_all, ws, we_excl
+        )
+        scr_cal, scr_cal_bd = _build_scraper_calendar(
+            scraper_meta, scraper_per_day_by_uid, ws, we_excl, wdays
+        )
+        scr_daily_bd = _build_scraper_daily_breakdowns(
+            scraper_meta, scraper_per_day_by_uid, ws, we_excl
+        )
+
+        # Reps & scrapers & setters — period totals at top level (this whole file IS the period)
+        rep_view     = _build_rep_view(rep_meta, rep_per_day_by_uid,
+                                        ws, we_excl, biz_days)
+        scraper_view = _build_scraper_view(scraper_meta, scraper_per_day_by_uid,
+                                            ws, we_excl)
+        setter_view  = []
+        for sm in setter_meta:
+            uid = sm["user_id"]
+            agg = aggregate_setter_for_period(
+                setter_per_day_by_uid.get(uid, {}),
+                ws, we_excl,
+                scraper_per_day_by_uid.get(uid),
+            )
+            setter_view.append({**sm, **agg})
+        setter_view.sort(key=lambda x: x["discovery_held"], reverse=True)
+
+        week_archive = {
+            "kind": "week",
+            "generated_at": now.isoformat(),
+            "week_start": ws.date().isoformat(),
+            "week_end":   (we_excl - timedelta(days=1)).date().isoformat(),
+            "week_label": format_week_label(ws, we_excl - timedelta(days=1)),
+            # Compat fields the HTML expects (it doesn't care that they hold week values)
+            "month": month_label,
+            "month_start": ws.date().isoformat(),
+            "month_end":   (we_excl - timedelta(days=1)).date().isoformat(),
+            "today":       (we_excl - timedelta(days=1)).date().isoformat(),
+            "business_days_elapsed": biz_days,
+            "business_days_elapsed_wtd": biz_days,
+            "calendar": cal,
+            "calendar_breakdowns": cal_bd,
+            "daily_breakdowns": daily_bd,
+            "scraper_calendar": scr_cal,
+            "scraper_calendar_breakdowns": scr_cal_bd,
+            "scraper_daily_breakdowns": scr_daily_bd,
+            "reps": rep_view,
+            "scrapers": scraper_view,
+            "setters": setter_view,
+        }
+        path = archives / f"week_{label}.json"
+        path.write_text(json.dumps(week_archive, indent=2))
+        print(f"wrote {path}", flush=True)
+        return path
+
+    if backfill_month_env:
+        # Rewrite every Mon-Fri week whose Monday falls within the target month
+        d = month_start
+        weeks_written = 0
+        while d < month_end:
+            if d.weekday() == 0:   # Monday
+                _write_week_archive(
+                    d, d + timedelta(days=5), d.strftime("%Y-%m-%d"), 5
+                )
+                weeks_written += 1
+            d += timedelta(days=1)
+        print(f"backfill: rewrote {weeks_written} weekly archives for {backfill_month_env}",
+              flush=True)
+    else:
+        _write_week_archive(week_start, week_end_excl, week_iso, biz_days_wtd)
+        for bw in backfill_weeks:
+            if bw["start"] < fetch_start:
+                print(f"  skip backfill {bw['label']} (outside fetch range)", flush=True)
+                continue
+            _write_week_archive(bw["start"], bw["end_exclusive"], bw["label"], 5)
+
+    # ─ Update the navigation index ────────────────────────────────────────
+    _update_archives_index(archives)
+
+    print(f"\nDone in {time.time() - started:.1f}s", flush=True)
 
 
 if __name__ == "__main__":
-    data = build_dashboard_data()
-
-    script_dir = os.path.dirname(os.path.abspath(__file__))
-    repo_root = os.path.dirname(script_dir)
-    output_path = os.path.join(repo_root, "data.json")
-
-    with open(output_path, "w") as f:
-        json.dump(data, f, indent=2)
-
-    # ── Weekly archive: save snapshot keyed by Monday's date ───────────
-    # Overwrites throughout the week; last run Friday = final snapshot
-    archive_dir = os.path.join(repo_root, "archives")
-    os.makedirs(archive_dir, exist_ok=True)
-
-    monday_str = data["monday_str"]  # e.g. "2026-03-03"
-    archive_path = os.path.join(archive_dir, f"data_week_{monday_str}.json")
-    with open(archive_path, "w") as f:
-        json.dump(data, f, indent=2)
-
-    index_path = os.path.join(archive_dir, "index.json")
-    try:
-        with open(index_path, "r") as f:
-            index_data = json.load(f)
-    except (FileNotFoundError, json.JSONDecodeError):
-        index_data = {}
-
-    # Migrate from old daily format if needed
-    if "weeks" not in index_data:
-        index_data = {"weeks": []}
-
-    if monday_str not in index_data["weeks"]:
-        index_data["weeks"].append(monday_str)
-        index_data["weeks"].sort(reverse=True)
-
-    with open(index_path, "w") as f:
-        json.dump(index_data, f, indent=2)
-
-    print(f"✅ Wrote {output_path}", flush=True)
-    print(f"📁 Archived week of {monday_str} to {archive_path}", flush=True)
-    print(f"   {len(data['reps'])} reps | {data['total_booked']} booked | "
-          f"{data['total_deals']} deals | ${data['total_revenue']:,.2f} revenue", flush=True)
+    main()
