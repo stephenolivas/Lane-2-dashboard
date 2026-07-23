@@ -96,6 +96,15 @@ FIELD_SETTER_NAME        = "cf_vz6kNiu4ItFxRA8Y9HKlWIoQMq3TsdaQqKekQ2YuxVk"
 
 EXCLUDED_FUNNELS = {"LTF - Quiz Funnel"}
 
+# Title prefixes that identify a scraper-booked "Next Steps" meeting. Different
+# closers use slightly different Calendly links. All start with one of these:
+NEXT_STEPS_TITLE_PREFIXES = (
+    "Vendingpreneurs Call - Next Steps",
+    "Vendingpreneurs Next Steps Call",
+    "Vendingpreneurs - Next Steps",
+    "Vendingpreneur Next Steps",
+)
+
 # ============================================================================
 # HTTP SESSION
 # ============================================================================
@@ -727,53 +736,6 @@ def fetch_scraper_activities_per_day(user_id, fetch_start):
     }
 
 
-def fetch_scraper_meetings_per_day(setter_value, fetch_start, fetch_end_exclusive):
-    """Per-day buckets for booked / shown meetings credited to a scraper, across
-    [fetch_start, fetch_end_exclusive].
-
-    Booked = leads where Setter Name = scraper AND First Sales Call Booked Date in
-    period AND funnel != LTF. Day = First Sales Call Booked Date.
-    Shown  = of those, First Call Show Up = "Yes".
-
-    Closes / revenue are computed separately via fetch_scraper_closes_per_day, using
-    the close-date attribution model (credit by date_won, not by booking date).
-    """
-    start_d = fetch_start.date().isoformat()
-    end_d   = (fetch_end_exclusive - timedelta(seconds=1)).date().isoformat()
-    q = (
-        f'custom.{FIELD_SETTER_NAME}:"{setter_value}" '
-        f'custom.{FIELD_FIRST_CALL_BOOKED}>="{start_d}" '
-        f'custom.{FIELD_FIRST_CALL_BOOKED}<="{end_d}"'
-    )
-    fields = (
-        f"id,"
-        f"custom.{FIELD_FIRST_CALL_BOOKED},"
-        f"custom.{FIELD_FIRST_CALL_SHOWUP},"
-        f"custom.{FIELD_FUNNEL_NAME}"
-    )
-
-    booked_pd = defaultdict(int)
-    shown_pd  = defaultdict(int)
-
-    for ld in close_paginate_skip("/lead/", {"query": q, "_fields": fields}):
-        if get_custom(ld, FIELD_FUNNEL_NAME) in EXCLUDED_FUNNELS:
-            continue
-        booked_date = get_custom(ld, FIELD_FIRST_CALL_BOOKED)
-        if not booked_date:
-            continue
-        day = booked_date[:10]
-        booked_pd[day] += 1
-
-        show_up = (get_custom(ld, FIELD_FIRST_CALL_SHOWUP) or "").strip().lower()
-        if show_up == "yes":
-            shown_pd[day] += 1
-
-    return {
-        "meetings_booked": dict(booked_pd),
-        "meetings_shown":  dict(shown_pd),
-    }
-
-
 def _lead_has_vqd_by(lead_id, setter_uid, title_prefix):
     """Does this specific lead have any meeting hosted by `setter_uid` whose title
     starts with `title_prefix`? Used to classify a closed-won lead as Inbound
@@ -981,92 +943,172 @@ def fetch_scraper_closes_per_day(scrapers, fetch_start, fetch_end_exclusive):
 
 
 def build_scraper_data(scraper, fetch_start, fetch_end_exclusive):
-    """Fetch ALL scraper data covering [fetch_start, fetch_end_exclusive]. Returns per_day dict.
+    """Fetch scraper ACTIVITY data (outbound calls / emails / sms) covering
+    [fetch_start, fetch_end_exclusive]. Meetings Set / Booked / Shown are
+    populated separately in main() via `fetch_scraper_meetings_bulk`.
     """
     print(f"[scraper] {scraper['name']}", flush=True)
-    uid = scraper["user_id"]
-    act_pd = fetch_scraper_activities_per_day(uid, fetch_start)
-    mtg_pd = fetch_scraper_meetings_per_day(
-        scraper["setter_field_value"], fetch_start, fetch_end_exclusive
-    )
-    return {**act_pd, **mtg_pd}
+    return fetch_scraper_activities_per_day(scraper["user_id"], fetch_start)
 
 
-def fetch_meetings_set_per_day(scrapers, start_pt, end_exclusive_pt):
-    """Per-scraper per-day count of meetings SET (i.e., meetings whose date_created
-    falls in the range).
+def _is_next_steps(title):
+    """Does this meeting title identify a scraper-booked Next Steps meeting?"""
+    if not title:
+        return False
+    return any(title.startswith(p) for p in NEXT_STEPS_TITLE_PREFIXES)
 
-    Matches the attribution used by the call-capacity dashboard's EOD "Scraper
-    Bookings" section: credited via the LEAD's `Reactivation - Setter Name`
-    field, filtered to `Funnel Name = "Reactivation Scrapers"` only. That excludes
-    William's Vendingpreneurs Quick Discovery meetings, Anthony's inbound calls,
-    etc. — only scraper-flow bookings count here.
 
-    Single org-wide `/activity/meeting/` query + one lead lookup per unique lead
-    (cached). Called with a NARROWER range than the main fetch_start — typically
-    just the ~3 weeks whose archives we're writing on this run — to keep runtime
-    manageable. Older days in existing archives keep whatever value they had
-    (`0` if the metric didn't exist yet, real number if it did).
+def _parse_pt_day(iso_str):
+    """Parse a Close ISO timestamp and return its PT calendar day (or None)."""
+    if not iso_str:
+        return None
+    try:
+        dt = datetime.fromisoformat(iso_str.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return dt.astimezone(TIMEZONE).date()
+
+
+def fetch_scraper_meetings_bulk(scrapers, meetings_set_start,
+                                  fetch_start, fetch_end_exclusive):
+    """Combined org-wide meeting query producing all three scraper meeting metrics
+    in a single pass:
+
+      - **Meetings Set** — bucketed by `date_created`. ANY meeting on a lead
+        with Setter Name = scraper and funnel = "Reactivation Scrapers" counts
+        (matches the call-capacity EOD email's convention).
+      - **Meetings Booked** — bucketed by `starts_at`. Only meetings whose title
+        matches one of NEXT_STEPS_TITLE_PREFIXES count. This replaces the older
+        `First Sales Call Booked Date` lead-side approach, which missed any
+        second/third Next Steps meeting on the same lead.
+      - **Meetings Shown** — subset of Booked where the lead's
+        `First Call Show Up (Opp)` field is "Yes". This field is per-lead (not
+        per-meeting), so all Next Steps meetings on a lead where the first call
+        showed are counted as shown. Coarser than ideal but matches how the
+        field is populated today; the user is planning a follow-up on this.
+
+    Pre-screens each meeting before hitting the lead endpoint: if a meeting's
+    date_created isn't in Set range AND its title/starts_at don't qualify for
+    Booked, we skip the lead lookup entirely. Cuts the expensive per-lead
+    lookups by ~10-30x on a typical run.
 
     Returns:
-      {scraper_user_id: {day: count}}
+      {scraper_uid: {
+        "meetings_set":    {day: count},
+        "meetings_booked": {day: count},
+        "meetings_shown":  {day: count},
+      }}
     """
     if not scrapers:
         return {}
     setter_to_uid = {s["setter_field_value"]: s["user_id"] for s in scrapers}
 
-    since_iso = start_pt.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-    end_iso   = end_exclusive_pt.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    # We query by date_created, but Booked/Shown bucket by starts_at. Meetings
+    # scheduled for `fetch_start` were typically created within ~3 weeks before.
+    # Extend the date_created range back to catch those. A meeting created before
+    # this cutoff whose starts_at is in the fetch range would be missed — rare
+    # in practice for scraper Next Steps calls (typical booking window is 1-14 days).
+    query_start_pt = min(
+        meetings_set_start,
+        fetch_start - timedelta(days=21),
+    )
+    since_iso = query_start_pt.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    end_iso   = fetch_end_exclusive.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
-    lead_cache = {}   # lead_id -> setter_field_value (or None if not attributed)
-    result = {uid: defaultdict(int) for uid in setter_to_uid.values()}
+    set_lo_d = meetings_set_start.date()
+    set_hi_d = fetch_end_exclusive.date()
+    bs_lo_d  = fetch_start.date()
+    bs_hi_d  = fetch_end_exclusive.date()
+
+    # lead_id -> (setter_field_value or None, showed_bool)
+    lead_cache = {}
+
+    result = {
+        uid: {
+            "meetings_set":    defaultdict(int),
+            "meetings_booked": defaultdict(int),
+            "meetings_shown":  defaultdict(int),
+        } for uid in setter_to_uid.values()
+    }
 
     total_seen = 0
-    attributed = 0
+    prescreen_pass = 0
+    n_set = 0
+    n_booked = 0
+    n_shown = 0
+
     for mtg in close_paginate_skip("/activity/meeting/", {
         "date_created__gte": since_iso,
         "date_created__lt":  end_iso,
     }):
         total_seen += 1
-        lead_id = mtg.get("lead_id")
-        date_created = mtg.get("date_created")
-        if not lead_id or not date_created:
+
+        # Pre-screen: could this meeting count for anything?
+        dc_day = _parse_pt_day(mtg.get("date_created"))
+        set_candidate = dc_day is not None and set_lo_d <= dc_day < set_hi_d
+
+        booked_candidate = False
+        sa_day = None
+        if _is_next_steps(mtg.get("title") or ""):
+            sa_day = _parse_pt_day(mtg.get("starts_at"))
+            if sa_day is not None and bs_lo_d <= sa_day < bs_hi_d:
+                booked_candidate = True
+
+        if not (set_candidate or booked_candidate):
             continue
+
+        lead_id = mtg.get("lead_id")
+        if not lead_id:
+            continue
+        prescreen_pass += 1
 
         if lead_id not in lead_cache:
             try:
                 ld = close_get(f"/lead/{lead_id}/", {
                     "_fields": (
                         f"id,custom.{FIELD_SETTER_NAME},"
-                        f"custom.{FIELD_FUNNEL_NAME}"
+                        f"custom.{FIELD_FUNNEL_NAME},"
+                        f"custom.{FIELD_FIRST_CALL_SHOWUP}"
                     )
                 })
                 funnel = get_custom(ld, FIELD_FUNNEL_NAME)
                 setter = (get_custom(ld, FIELD_SETTER_NAME) or "").strip()
-                # Only count meetings on Reactivation Scrapers funnel leads
-                # AND where Setter Name matches a configured scraper — mirrors
-                # the call-capacity EOD email's rule.
+                showed = (get_custom(ld, FIELD_FIRST_CALL_SHOWUP) or "").strip().lower() == "yes"
                 if funnel == "Reactivation Scrapers" and setter in setter_to_uid:
-                    lead_cache[lead_id] = setter
+                    lead_cache[lead_id] = (setter, showed)
                 else:
-                    lead_cache[lead_id] = None
+                    lead_cache[lead_id] = (None, False)
             except requests.HTTPError:
-                lead_cache[lead_id] = None
+                lead_cache[lead_id] = (None, False)
 
-        setter = lead_cache[lead_id]
+        setter, showed = lead_cache[lead_id]
         if not setter:
             continue
-        try:
-            dt = datetime.fromisoformat(date_created.replace("Z", "+00:00"))
-            day = dt.astimezone(TIMEZONE).date().isoformat()
-        except ValueError:
-            continue
-        result[setter_to_uid[setter]][day] += 1
-        attributed += 1
 
-    print(f"  meetings-set: scanned {total_seen} meetings, attributed {attributed} "
-          f"across {len(lead_cache)} unique leads looked up", flush=True)
-    return {uid: dict(days) for uid, days in result.items()}
+        uid = setter_to_uid[setter]
+
+        if set_candidate:
+            result[uid]["meetings_set"][dc_day.isoformat()] += 1
+            n_set += 1
+
+        if booked_candidate:
+            result[uid]["meetings_booked"][sa_day.isoformat()] += 1
+            n_booked += 1
+            if showed:
+                result[uid]["meetings_shown"][sa_day.isoformat()] += 1
+                n_shown += 1
+
+    print(f"  scraper meetings bulk: scanned {total_seen} org-wide meetings, "
+          f"{prescreen_pass} passed pre-screen, "
+          f"{len(lead_cache)} unique leads looked up",
+          flush=True)
+    print(f"    → set={n_set} · booked={n_booked} (Next Steps titles) · shown={n_shown}",
+          flush=True)
+
+    return {
+        uid: {k: dict(v) for k, v in data.items()}
+        for uid, data in result.items()
+    }
 
 
 def aggregate_scraper_for_period(per_day, start_pt, end_exclusive_pt):
@@ -1532,28 +1574,34 @@ def main():
         if uid in scraper_per_day_by_uid:
             scraper_per_day_by_uid[uid].update(closes)
 
-    # ─ Scraper "Meetings Set" (activity metric, per-day) ─────────────────
-    # Meetings whose date_created falls in a given day, credited to the
-    # scraper via the LEAD's Setter Name field and filtered to Reactivation
-    # Scrapers funnel (matches the call-capacity dashboard's convention).
+    # ─ Scraper meetings (Set / Booked / Shown) via single org-wide query ────
+    # ALL three metrics come from one meeting-activity pull:
+    #   - Set:    counted by date_created (any meeting on a Reactivation Scrapers
+    #             lead with matching Setter Name)
+    #   - Booked: counted by starts_at, ONLY meetings whose title matches one
+    #             of NEXT_STEPS_TITLE_PREFIXES. Replaces the older FSCBD-based
+    #             logic that missed 2nd/3rd Next Steps meetings on the same lead.
+    #   - Shown:  subset of Booked where lead's First Call Show Up = "Yes"
     #
-    # Scoped narrower than fetch_start on normal runs to keep runtime down —
-    # we only need this data for the archives we're actually writing on this
-    # run (current week + 2 backfill weeks). In backfill mode we cover the
-    # full target month.
+    # Scoped narrower than fetch_start on normal runs — we only need meetings-set
+    # for the archives we're actually writing on this run (current + 2 backfill
+    # weeks). In backfill mode we cover the full target month.
     if backfill_month_env:
         meetings_set_start = fetch_start
     else:
         meetings_set_start = earliest_week
-    print(f"\n[scrapers] fetching meetings-set (activity-based, "
-          f"range {meetings_set_start.date()} → {(month_end - timedelta(days=1)).date()})",
-          flush=True)
-    meetings_set_by_uid = fetch_meetings_set_per_day(
-        SCRAPERS, meetings_set_start, month_end
+    print(f"\n[scrapers] fetching meetings (bulk: set / booked / shown, "
+          f"set range {meetings_set_start.date()} → "
+          f"{(month_end - timedelta(days=1)).date()})", flush=True)
+    scraper_meetings_by_uid = fetch_scraper_meetings_bulk(
+        SCRAPERS, meetings_set_start, fetch_start, month_end
     )
-    for uid, days in meetings_set_by_uid.items():
+    for uid, metrics in scraper_meetings_by_uid.items():
         if uid in scraper_per_day_by_uid:
-            scraper_per_day_by_uid[uid]["meetings_set"] = days
+            # Replaces the (now-removed) FSCBD-based meetings_booked/shown.
+            scraper_per_day_by_uid[uid]["meetings_set"]    = metrics["meetings_set"]
+            scraper_per_day_by_uid[uid]["meetings_booked"] = metrics["meetings_booked"]
+            scraper_per_day_by_uid[uid]["meetings_shown"]  = metrics["meetings_shown"]
 
     # ─ Assemble views for MTD + current WTD ───────────────────────────────
     reps_mtd     = _build_rep_view(rep_meta, rep_per_day_by_uid,
