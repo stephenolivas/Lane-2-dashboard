@@ -61,12 +61,6 @@ SCRAPERS = [
     {"name": "Jacob Hepner",
      "user_id": "user_IeWR2TlhpjqoXy3K6jX7u9C8c83iBnHXSIvFZpotF3z",
      "setter_field_value": "Jacob Hepner"},
-    {"name": "Juan Cajina",
-     "user_id": "user_E2WNDcnSES6SFuqyEulrIakLepLqJzHIimWaovDFkhK",
-     "setter_field_value": "Juan Cajina"},
-    {"name": "Jennifer Padilla",
-     "user_id": "user_QgFeDsKkV4fsOtkTYeOJMURXPqqhZA8d4kHbE8rzat7",
-     "setter_field_value": "Jennifer Padilla"},
 ]
 
 # Setters hold their own discovery calls (in addition to the calls they book for
