@@ -1,6 +1,6 @@
 {
   "kind": "week",
-  "generated_at": "2026-08-04T12:00:18.448853-07:00",
+  "generated_at": "2026-08-04T13:00:19.752696-07:00",
   "week_start": "2026-08-03",
   "week_end": "2026-08-07",
   "week_label": "Aug 3 \u2013 7, 2026",
@@ -12,16 +12,17 @@
   "business_days_elapsed_wtd": 2,
   "calendar": {
     "2026-08-03": 112,
-    "2026-08-04": 12,
+    "2026-08-04": 16,
     "2026-08-05": 0,
     "2026-08-06": 0,
     "2026-08-07": 0
   },
   "calendar_breakdowns": {
     "2026-08-04": {
+      "Route Builder": 3,
+      "LTF All Booked / Did Not Convert": 2,
       "No Activity / Past 14 Days": 2,
       "Prior Day Lost Deals": 2,
-      "LTF All Booked / Did Not Convert": 1,
       "No Activity / Past 30 Days": 1,
       "(unset)": 6
     },
@@ -39,24 +40,6 @@
     }
   },
   "daily_breakdowns": {
-    "2026-08-04": {
-      "user_WquWudQN7dghZsAPiNY80eJUmg1EadQg2UCQdvgbif7": {
-        "name": "Kelly Schrader",
-        "new_leads": 7,
-        "outbound_calls": 4,
-        "outbound_emails": 0,
-        "calls_booked": 2,
-        "deals_closed": 0
-      },
-      "user_MrBLkl5wCqTm7QxHxPo2ydNV5KxMllg6YZDVc12Aqzj": {
-        "name": "Jason Aaron",
-        "new_leads": 5,
-        "outbound_calls": 0,
-        "outbound_emails": 0,
-        "calls_booked": 1,
-        "deals_closed": 0
-      }
-    },
     "2026-08-03": {
       "user_WquWudQN7dghZsAPiNY80eJUmg1EadQg2UCQdvgbif7": {
         "name": "Kelly Schrader",
@@ -72,6 +55,24 @@
         "outbound_calls": 0,
         "outbound_emails": 5,
         "calls_booked": 3,
+        "deals_closed": 0
+      }
+    },
+    "2026-08-04": {
+      "user_WquWudQN7dghZsAPiNY80eJUmg1EadQg2UCQdvgbif7": {
+        "name": "Kelly Schrader",
+        "new_leads": 9,
+        "outbound_calls": 4,
+        "outbound_emails": 0,
+        "calls_booked": 2,
+        "deals_closed": 0
+      },
+      "user_MrBLkl5wCqTm7QxHxPo2ydNV5KxMllg6YZDVc12Aqzj": {
+        "name": "Jason Aaron",
+        "new_leads": 7,
+        "outbound_calls": 0,
+        "outbound_emails": 0,
+        "calls_booked": 1,
         "deals_closed": 0
       }
     },
@@ -114,38 +115,6 @@
     }
   },
   "scraper_daily_breakdowns": {
-    "2026-08-04": {
-      "user_dQi0iL0igjCKtEXPSsv8ALDZMAz9orJxL60O7Q921jy": {
-        "name": "Vince Bartolini",
-        "meetings_set": 4,
-        "meetings_booked": 7,
-        "meetings_shown": 4,
-        "meetings_closed": 0,
-        "outbound_calls": 62,
-        "outbound_emails": 188,
-        "outbound_sms": 388
-      },
-      "user_ZNKG1S9eI71qxhSozBK4jskTVtJqXzfNCPWqmADRR9F": {
-        "name": "William Nowak",
-        "meetings_set": 3,
-        "meetings_booked": 5,
-        "meetings_shown": 4,
-        "meetings_closed": 0,
-        "outbound_calls": 154,
-        "outbound_emails": 3,
-        "outbound_sms": 3
-      },
-      "user_IeWR2TlhpjqoXy3K6jX7u9C8c83iBnHXSIvFZpotF3z": {
-        "name": "Jacob Hepner",
-        "meetings_set": 1,
-        "meetings_booked": 2,
-        "meetings_shown": 0,
-        "meetings_closed": 0,
-        "outbound_calls": 81,
-        "outbound_emails": 3,
-        "outbound_sms": 102
-      }
-    },
     "2026-08-03": {
       "user_dQi0iL0igjCKtEXPSsv8ALDZMAz9orJxL60O7Q921jy": {
         "name": "Vince Bartolini",
@@ -175,7 +144,39 @@
         "meetings_closed": 0,
         "outbound_calls": 109,
         "outbound_emails": 55,
-        "outbound_sms": 881
+        "outbound_sms": 882
+      }
+    },
+    "2026-08-04": {
+      "user_dQi0iL0igjCKtEXPSsv8ALDZMAz9orJxL60O7Q921jy": {
+        "name": "Vince Bartolini",
+        "meetings_set": 4,
+        "meetings_booked": 7,
+        "meetings_shown": 4,
+        "meetings_closed": 0,
+        "outbound_calls": 62,
+        "outbound_emails": 193,
+        "outbound_sms": 459
+      },
+      "user_ZNKG1S9eI71qxhSozBK4jskTVtJqXzfNCPWqmADRR9F": {
+        "name": "William Nowak",
+        "meetings_set": 3,
+        "meetings_booked": 5,
+        "meetings_shown": 4,
+        "meetings_closed": 0,
+        "outbound_calls": 154,
+        "outbound_emails": 3,
+        "outbound_sms": 3
+      },
+      "user_IeWR2TlhpjqoXy3K6jX7u9C8c83iBnHXSIvFZpotF3z": {
+        "name": "Jacob Hepner",
+        "meetings_set": 1,
+        "meetings_booked": 2,
+        "meetings_shown": 0,
+        "meetings_closed": 0,
+        "outbound_calls": 90,
+        "outbound_emails": 4,
+        "outbound_sms": 125
       }
     },
     "2026-08-05": {
@@ -232,18 +233,18 @@
         "(unset)": 520,
         "LTF All Booked / Did Not Convert": 126,
         "No Activity / Past 14 Days": 101,
-        "Prior Day Lost Deals": 75,
+        "Prior Day Lost Deals": 73,
         "Webinar - Attended / Did Not Book": 34,
         "No Activity / Past 30 Days": 19,
         "Webinar - Registered / Did Not Attend": 8,
         "LTF Course Purchased / Did Not Book": 8,
+        "Route Builder": 5,
         "30 Day Aged Deals": 5,
-        "Route Builder": 3,
         "Typeform Entry / Did Not Book": 2,
         "LTF Course Purchased / High Activity": 1
       },
       "leads_zero_comms": 46,
-      "activities_mtd": 16,
+      "activities_mtd": 20,
       "outbound_calls_mtd": 0,
       "outbound_emails_mtd": 5,
       "outbound_calls_per_day_avg": 0.0,
@@ -259,19 +260,19 @@
       "handraiser_breakdown": {
         "(unset)": 487,
         "No Activity / Past 14 Days": 125,
-        "LTF All Booked / Did Not Convert": 124,
+        "LTF All Booked / Did Not Convert": 123,
         "Webinar - Attended / Did Not Book": 39,
         "LTF Course Purchased / Did Not Book": 26,
         "30 Day Aged Deals": 22,
         "No Activity / Past 30 Days": 22,
         "Typeform Entry / Did Not Book": 9,
         "Webinar - Registered / Did Not Attend": 8,
+        "Route Builder": 4,
         "Typeform Entry / DQ'd": 4,
-        "Route Builder": 3,
         "LTF Course Purchased / High Activity": 2
       },
       "leads_zero_comms": 4,
-      "activities_mtd": 177,
+      "activities_mtd": 178,
       "outbound_calls_mtd": 6,
       "outbound_emails_mtd": 0,
       "outbound_calls_per_day_avg": 3.0,
@@ -300,11 +301,11 @@
     {
       "user_id": "user_dQi0iL0igjCKtEXPSsv8ALDZMAz9orJxL60O7Q921jy",
       "name": "Vince Bartolini",
-      "activities_mtd_total": 6375,
+      "activities_mtd_total": 6451,
       "activities_breakdown": {
         "outbound_calls": 239,
-        "outbound_emails": 1014,
-        "outbound_sms": 5122
+        "outbound_emails": 1019,
+        "outbound_sms": 5193
       },
       "meetings_booked_mtd": 11,
       "meetings_shown_mtd": 6,
@@ -323,11 +324,11 @@
     {
       "user_id": "user_IeWR2TlhpjqoXy3K6jX7u9C8c83iBnHXSIvFZpotF3z",
       "name": "Jacob Hepner",
-      "activities_mtd_total": 1231,
+      "activities_mtd_total": 1265,
       "activities_breakdown": {
-        "outbound_calls": 190,
-        "outbound_emails": 58,
-        "outbound_sms": 983
+        "outbound_calls": 199,
+        "outbound_emails": 59,
+        "outbound_sms": 1007
       },
       "meetings_booked_mtd": 5,
       "meetings_shown_mtd": 2,
