@@ -1,6 +1,6 @@
 {
   "kind": "week",
-  "generated_at": "2026-08-17T12:48:43.312935-07:00",
+  "generated_at": "2026-08-17T13:34:04.592317-07:00",
   "week_start": "2026-08-17",
   "week_end": "2026-08-21",
   "week_label": "Aug 17 \u2013 21, 2026",
@@ -11,7 +11,7 @@
   "business_days_elapsed": 1,
   "business_days_elapsed_wtd": 1,
   "calendar": {
-    "2026-08-17": 21,
+    "2026-08-17": 23,
     "2026-08-18": 0,
     "2026-08-19": 0,
     "2026-08-20": 0,
@@ -19,19 +19,19 @@
   },
   "calendar_breakdowns": {
     "2026-08-17": {
-      "LTF All Booked / Did Not Convert": 6,
+      "LTF All Booked / Did Not Convert": 7,
       "No Activity / Past 14 Days": 4,
       "LTF Course Purchased / Did Not Book": 1,
       "LTF Course Purchased / High Activity": 1,
       "Typeform Entry / Did Not Book": 1,
-      "(unset)": 8
+      "(unset)": 9
     }
   },
   "daily_breakdowns": {
     "2026-08-17": {
       "user_WquWudQN7dghZsAPiNY80eJUmg1EadQg2UCQdvgbif7": {
         "name": "Kelly Schrader",
-        "new_leads": 21,
+        "new_leads": 23,
         "outbound_calls": 0,
         "outbound_emails": 0,
         "calls_booked": 0,
@@ -60,11 +60,21 @@
     }
   },
   "scraper_daily_breakdowns": {
-    "2026-08-19": {
+    "2026-08-18": {
       "user_dQi0iL0igjCKtEXPSsv8ALDZMAz9orJxL60O7Q921jy": {
         "name": "Vince Bartolini",
         "meetings_set": 0,
-        "meetings_booked": 3,
+        "meetings_booked": 1,
+        "meetings_shown": 0,
+        "meetings_closed": 0,
+        "outbound_calls": 0,
+        "outbound_emails": 0,
+        "outbound_sms": 0
+      },
+      "user_IeWR2TlhpjqoXy3K6jX7u9C8c83iBnHXSIvFZpotF3z": {
+        "name": "Jacob Hepner",
+        "meetings_set": 0,
+        "meetings_booked": 1,
         "meetings_shown": 0,
         "meetings_closed": 0,
         "outbound_calls": 0,
@@ -80,8 +90,8 @@
         "meetings_shown": 2,
         "meetings_closed": 0,
         "outbound_calls": 60,
-        "outbound_emails": 560,
-        "outbound_sms": 5354
+        "outbound_emails": 616,
+        "outbound_sms": 6235
       },
       "user_ZNKG1S9eI71qxhSozBK4jskTVtJqXzfNCPWqmADRR9F": {
         "name": "William Nowak",
@@ -101,24 +111,14 @@
         "meetings_closed": 0,
         "outbound_calls": 0,
         "outbound_emails": 1,
-        "outbound_sms": 556
+        "outbound_sms": 636
       }
     },
-    "2026-08-18": {
+    "2026-08-19": {
       "user_dQi0iL0igjCKtEXPSsv8ALDZMAz9orJxL60O7Q921jy": {
         "name": "Vince Bartolini",
         "meetings_set": 0,
-        "meetings_booked": 1,
-        "meetings_shown": 0,
-        "meetings_closed": 0,
-        "outbound_calls": 0,
-        "outbound_emails": 0,
-        "outbound_sms": 0
-      },
-      "user_IeWR2TlhpjqoXy3K6jX7u9C8c83iBnHXSIvFZpotF3z": {
-        "name": "Jacob Hepner",
-        "meetings_set": 0,
-        "meetings_booked": 1,
+        "meetings_booked": 3,
         "meetings_shown": 0,
         "meetings_closed": 0,
         "outbound_calls": 0,
@@ -147,7 +147,7 @@
         "LTF Course Purchased / High Activity": 3
       },
       "leads_zero_comms": 517,
-      "activities_mtd": 90,
+      "activities_mtd": 99,
       "outbound_calls_mtd": 0,
       "outbound_emails_mtd": 0,
       "outbound_calls_per_day_avg": 0.0,
@@ -176,11 +176,11 @@
     {
       "user_id": "user_dQi0iL0igjCKtEXPSsv8ALDZMAz9orJxL60O7Q921jy",
       "name": "Vince Bartolini",
-      "activities_mtd_total": 5974,
+      "activities_mtd_total": 6911,
       "activities_breakdown": {
         "outbound_calls": 60,
-        "outbound_emails": 560,
-        "outbound_sms": 5354
+        "outbound_emails": 616,
+        "outbound_sms": 6235
       },
       "meetings_booked_mtd": 9,
       "meetings_shown_mtd": 2,
@@ -191,11 +191,11 @@
     {
       "user_id": "user_IeWR2TlhpjqoXy3K6jX7u9C8c83iBnHXSIvFZpotF3z",
       "name": "Jacob Hepner",
-      "activities_mtd_total": 557,
+      "activities_mtd_total": 637,
       "activities_breakdown": {
         "outbound_calls": 0,
         "outbound_emails": 1,
-        "outbound_sms": 556
+        "outbound_sms": 636
       },
       "meetings_booked_mtd": 2,
       "meetings_shown_mtd": 0,
