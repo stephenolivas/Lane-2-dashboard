@@ -1,6 +1,6 @@
 {
   "kind": "week",
-  "generated_at": "2026-08-24T15:02:40.141562-07:00",
+  "generated_at": "2026-08-24T15:58:51.596399-07:00",
   "week_start": "2026-08-24",
   "week_end": "2026-08-28",
   "week_label": "Aug 24 \u2013 28, 2026",
@@ -11,7 +11,7 @@
   "business_days_elapsed": 1,
   "business_days_elapsed_wtd": 1,
   "calendar": {
-    "2026-08-24": 14,
+    "2026-08-24": 36,
     "2026-08-25": 0,
     "2026-08-26": 0,
     "2026-08-27": 0,
@@ -19,17 +19,21 @@
   },
   "calendar_breakdowns": {
     "2026-08-24": {
-      "No Activity / Past 14 Days": 5,
+      "No Activity / Past 14 Days": 9,
+      "LTF Course Purchased / Did Not Book": 4,
+      "30 Day Aged Deals": 2,
       "LTF All Booked / Did Not Convert": 1,
-      "LTF Course Purchased / Did Not Book": 1,
-      "(unset)": 7
+      "Route Builder": 1,
+      "Typeform Entry / Did Not Book": 1,
+      "Webinar - Attended / Did Not Book": 1,
+      "(unset)": 17
     }
   },
   "daily_breakdowns": {
     "2026-08-24": {
       "user_WquWudQN7dghZsAPiNY80eJUmg1EadQg2UCQdvgbif7": {
         "name": "Kelly Schrader",
-        "new_leads": 14,
+        "new_leads": 36,
         "outbound_calls": 0,
         "outbound_emails": 0,
         "calls_booked": 0,
@@ -61,6 +65,18 @@
     }
   },
   "scraper_daily_breakdowns": {
+    "2026-08-27": {
+      "user_dQi0iL0igjCKtEXPSsv8ALDZMAz9orJxL60O7Q921jy": {
+        "name": "Vince Bartolini",
+        "meetings_set": 0,
+        "meetings_booked": 1,
+        "meetings_shown": 1,
+        "meetings_closed": 0,
+        "outbound_calls": 0,
+        "outbound_emails": 0,
+        "outbound_sms": 0
+      }
+    },
     "2026-08-24": {
       "user_dQi0iL0igjCKtEXPSsv8ALDZMAz9orJxL60O7Q921jy": {
         "name": "Vince Bartolini",
@@ -69,14 +85,14 @@
         "meetings_shown": 1,
         "meetings_closed": 0,
         "outbound_calls": 0,
-        "outbound_emails": 540,
-        "outbound_sms": 7477
+        "outbound_emails": 562,
+        "outbound_sms": 7633
       },
       "user_ZNKG1S9eI71qxhSozBK4jskTVtJqXzfNCPWqmADRR9F": {
         "name": "William Nowak",
         "meetings_set": 1,
         "meetings_booked": 1,
-        "meetings_shown": 0,
+        "meetings_shown": 1,
         "meetings_closed": 0,
         "outbound_calls": 55,
         "outbound_emails": 3,
@@ -91,6 +107,18 @@
         "outbound_calls": 0,
         "outbound_emails": 0,
         "outbound_sms": 186
+      }
+    },
+    "2026-08-28": {
+      "user_dQi0iL0igjCKtEXPSsv8ALDZMAz9orJxL60O7Q921jy": {
+        "name": "Vince Bartolini",
+        "meetings_set": 0,
+        "meetings_booked": 1,
+        "meetings_shown": 1,
+        "meetings_closed": 0,
+        "outbound_calls": 0,
+        "outbound_emails": 0,
+        "outbound_sms": 0
       }
     },
     "2026-08-25": {
@@ -109,30 +137,6 @@
         "meetings_set": 0,
         "meetings_booked": 2,
         "meetings_shown": 0,
-        "meetings_closed": 0,
-        "outbound_calls": 0,
-        "outbound_emails": 0,
-        "outbound_sms": 0
-      }
-    },
-    "2026-08-28": {
-      "user_dQi0iL0igjCKtEXPSsv8ALDZMAz9orJxL60O7Q921jy": {
-        "name": "Vince Bartolini",
-        "meetings_set": 0,
-        "meetings_booked": 1,
-        "meetings_shown": 1,
-        "meetings_closed": 0,
-        "outbound_calls": 0,
-        "outbound_emails": 0,
-        "outbound_sms": 0
-      }
-    },
-    "2026-08-27": {
-      "user_dQi0iL0igjCKtEXPSsv8ALDZMAz9orJxL60O7Q921jy": {
-        "name": "Vince Bartolini",
-        "meetings_set": 0,
-        "meetings_booked": 1,
-        "meetings_shown": 1,
         "meetings_closed": 0,
         "outbound_calls": 0,
         "outbound_emails": 0,
@@ -159,8 +163,8 @@
         "Typeform Entry / DQ'd": 4,
         "LTF Course Purchased / High Activity": 2
       },
-      "leads_zero_comms": 515,
-      "activities_mtd": 92,
+      "leads_zero_comms": 513,
+      "activities_mtd": 96,
       "outbound_calls_mtd": 0,
       "outbound_emails_mtd": 0,
       "outbound_calls_per_day_avg": 0.0,
@@ -189,11 +193,11 @@
     {
       "user_id": "user_dQi0iL0igjCKtEXPSsv8ALDZMAz9orJxL60O7Q921jy",
       "name": "Vince Bartolini",
-      "activities_mtd_total": 8017,
+      "activities_mtd_total": 8195,
       "activities_breakdown": {
         "outbound_calls": 0,
-        "outbound_emails": 540,
-        "outbound_sms": 7477
+        "outbound_emails": 562,
+        "outbound_sms": 7633
       },
       "meetings_booked_mtd": 8,
       "meetings_shown_mtd": 4,
@@ -211,7 +215,7 @@
         "outbound_sms": 8
       },
       "meetings_booked_mtd": 3,
-      "meetings_shown_mtd": 0,
+      "meetings_shown_mtd": 1,
       "meetings_closed_ever": 0,
       "meetings_closed_revenue_ever": 0,
       "meetings_closed_leads": []
