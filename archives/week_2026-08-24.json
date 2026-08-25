@@ -1,6 +1,6 @@
 {
   "kind": "week",
-  "generated_at": "2026-08-25T10:22:47.587131-07:00",
+  "generated_at": "2026-08-25T12:13:09.756373-07:00",
   "week_start": "2026-08-24",
   "week_end": "2026-08-28",
   "week_label": "Aug 24 \u2013 28, 2026",
@@ -12,15 +12,19 @@
   "business_days_elapsed_wtd": 2,
   "calendar": {
     "2026-08-24": 54,
-    "2026-08-25": 2,
+    "2026-08-25": 419,
     "2026-08-26": 0,
     "2026-08-27": 0,
     "2026-08-28": 0
   },
   "calendar_breakdowns": {
     "2026-08-25": {
+      "LTF Course Purchased / High Activity": 3,
+      "LTF All Booked / Did Not Convert": 2,
       "No Activity / Past 14 Days": 1,
-      "Webinar - Registered / Did Not Attend": 1
+      "Webinar - Attended / Did Not Book": 1,
+      "Webinar - Registered / Did Not Attend": 1,
+      "(unset)": 411
     },
     "2026-08-24": {
       "No Activity / Past 14 Days": 11,
@@ -48,7 +52,7 @@
     "2026-08-25": {
       "user_WquWudQN7dghZsAPiNY80eJUmg1EadQg2UCQdvgbif7": {
         "name": "Kelly Schrader",
-        "new_leads": 2,
+        "new_leads": 419,
         "outbound_calls": 0,
         "outbound_emails": 0,
         "calls_booked": 0,
@@ -60,16 +64,16 @@
     "2026-08-24": 4,
     "2026-08-25": 6,
     "2026-08-26": 3,
-    "2026-08-27": 1,
+    "2026-08-27": 2,
     "2026-08-28": 1
   },
   "scraper_calendar_breakdowns": {
+    "2026-08-27": {
+      "Vince Bartolini": 2
+    },
     "2026-08-25": {
       "Vince Bartolini": 4,
       "William Nowak": 2
-    },
-    "2026-08-27": {
-      "Vince Bartolini": 1
     },
     "2026-08-24": {
       "Vince Bartolini": 3,
@@ -95,16 +99,28 @@
         "outbound_sms": 0
       }
     },
+    "2026-08-27": {
+      "user_dQi0iL0igjCKtEXPSsv8ALDZMAz9orJxL60O7Q921jy": {
+        "name": "Vince Bartolini",
+        "meetings_set": 0,
+        "meetings_booked": 2,
+        "meetings_shown": 2,
+        "meetings_closed": 0,
+        "outbound_calls": 0,
+        "outbound_emails": 0,
+        "outbound_sms": 0
+      }
+    },
     "2026-08-25": {
       "user_dQi0iL0igjCKtEXPSsv8ALDZMAz9orJxL60O7Q921jy": {
         "name": "Vince Bartolini",
-        "meetings_set": 1,
+        "meetings_set": 3,
         "meetings_booked": 4,
-        "meetings_shown": 2,
+        "meetings_shown": 4,
         "meetings_closed": 0,
-        "outbound_calls": 65,
-        "outbound_emails": 127,
-        "outbound_sms": 1165
+        "outbound_calls": 152,
+        "outbound_emails": 160,
+        "outbound_sms": 1970
       },
       "user_ZNKG1S9eI71qxhSozBK4jskTVtJqXzfNCPWqmADRR9F": {
         "name": "William Nowak",
@@ -114,7 +130,7 @@
         "meetings_closed": 0,
         "outbound_calls": 38,
         "outbound_emails": 4,
-        "outbound_sms": 9
+        "outbound_sms": 15
       }
     },
     "2026-08-24": {
@@ -126,7 +142,7 @@
         "meetings_closed": 0,
         "outbound_calls": 0,
         "outbound_emails": 618,
-        "outbound_sms": 7796
+        "outbound_sms": 7799
       },
       "user_ZNKG1S9eI71qxhSozBK4jskTVtJqXzfNCPWqmADRR9F": {
         "name": "William Nowak",
@@ -149,18 +165,6 @@
         "outbound_sms": 186
       }
     },
-    "2026-08-27": {
-      "user_dQi0iL0igjCKtEXPSsv8ALDZMAz9orJxL60O7Q921jy": {
-        "name": "Vince Bartolini",
-        "meetings_set": 0,
-        "meetings_booked": 1,
-        "meetings_shown": 1,
-        "meetings_closed": 0,
-        "outbound_calls": 0,
-        "outbound_emails": 0,
-        "outbound_sms": 0
-      }
-    },
     "2026-08-26": {
       "user_ZNKG1S9eI71qxhSozBK4jskTVtJqXzfNCPWqmADRR9F": {
         "name": "William Nowak",
@@ -178,23 +182,23 @@
     {
       "user_id": "user_WquWudQN7dghZsAPiNY80eJUmg1EadQg2UCQdvgbif7",
       "name": "Kelly Schrader",
-      "owned_leads": 2234,
+      "owned_leads": 2650,
       "handraiser_breakdown": {
-        "(unset)": 1688,
+        "(unset)": 2099,
         "Webinar - Registered / Did Not Attend": 177,
         "No Activity / Past 14 Days": 125,
-        "LTF All Booked / Did Not Convert": 74,
+        "LTF All Booked / Did Not Convert": 76,
         "LTF Course Purchased / Did Not Book": 54,
         "Webinar - Attended / Did Not Book": 46,
         "No Activity / Past 30 Days": 23,
         "30 Day Aged Deals": 22,
         "Typeform Entry / Did Not Book": 12,
         "Route Builder": 7,
-        "Typeform Entry / DQ'd": 4,
-        "LTF Course Purchased / High Activity": 2
+        "LTF Course Purchased / High Activity": 5,
+        "Typeform Entry / DQ'd": 4
       },
-      "leads_zero_comms": 512,
-      "activities_mtd": 102,
+      "leads_zero_comms": 853,
+      "activities_mtd": 103,
       "outbound_calls_mtd": 0,
       "outbound_emails_mtd": 0,
       "outbound_calls_per_day_avg": 0.0,
@@ -223,14 +227,14 @@
     {
       "user_id": "user_dQi0iL0igjCKtEXPSsv8ALDZMAz9orJxL60O7Q921jy",
       "name": "Vince Bartolini",
-      "activities_mtd_total": 9771,
+      "activities_mtd_total": 10699,
       "activities_breakdown": {
-        "outbound_calls": 65,
-        "outbound_emails": 745,
-        "outbound_sms": 8961
+        "outbound_calls": 152,
+        "outbound_emails": 778,
+        "outbound_sms": 9769
       },
-      "meetings_booked_mtd": 9,
-      "meetings_shown_mtd": 5,
+      "meetings_booked_mtd": 10,
+      "meetings_shown_mtd": 8,
       "meetings_closed_ever": 0,
       "meetings_closed_revenue_ever": 0,
       "meetings_closed_leads": []
@@ -238,11 +242,11 @@
     {
       "user_id": "user_ZNKG1S9eI71qxhSozBK4jskTVtJqXzfNCPWqmADRR9F",
       "name": "William Nowak",
-      "activities_mtd_total": 181,
+      "activities_mtd_total": 187,
       "activities_breakdown": {
         "outbound_calls": 147,
         "outbound_emails": 7,
-        "outbound_sms": 27
+        "outbound_sms": 33
       },
       "meetings_booked_mtd": 6,
       "meetings_shown_mtd": 1,
@@ -285,8 +289,8 @@
     {
       "user_id": "user_ZNKG1S9eI71qxhSozBK4jskTVtJqXzfNCPWqmADRR9F",
       "name": "William Nowak",
-      "discovery_held": 1,
-      "discovery_shown": 1,
+      "discovery_held": 3,
+      "discovery_shown": 3,
       "discovery_set": 6,
       "show_pct": 100.0,
       "inbound_revenue": 0,
