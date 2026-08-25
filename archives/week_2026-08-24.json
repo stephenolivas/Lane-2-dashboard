@@ -1,6 +1,6 @@
 {
   "kind": "week",
-  "generated_at": "2026-08-25T09:14:47.768278-07:00",
+  "generated_at": "2026-08-25T10:22:47.587131-07:00",
   "week_start": "2026-08-24",
   "week_end": "2026-08-28",
   "week_label": "Aug 24 \u2013 28, 2026",
@@ -35,20 +35,20 @@
     }
   },
   "daily_breakdowns": {
-    "2026-08-25": {
+    "2026-08-24": {
       "user_WquWudQN7dghZsAPiNY80eJUmg1EadQg2UCQdvgbif7": {
         "name": "Kelly Schrader",
-        "new_leads": 2,
+        "new_leads": 54,
         "outbound_calls": 0,
         "outbound_emails": 0,
         "calls_booked": 0,
         "deals_closed": 0
       }
     },
-    "2026-08-24": {
+    "2026-08-25": {
       "user_WquWudQN7dghZsAPiNY80eJUmg1EadQg2UCQdvgbif7": {
         "name": "Kelly Schrader",
-        "new_leads": 54,
+        "new_leads": 2,
         "outbound_calls": 0,
         "outbound_emails": 0,
         "calls_booked": 0,
@@ -102,9 +102,9 @@
         "meetings_booked": 4,
         "meetings_shown": 2,
         "meetings_closed": 0,
-        "outbound_calls": 45,
-        "outbound_emails": 105,
-        "outbound_sms": 628
+        "outbound_calls": 65,
+        "outbound_emails": 127,
+        "outbound_sms": 1165
       },
       "user_ZNKG1S9eI71qxhSozBK4jskTVtJqXzfNCPWqmADRR9F": {
         "name": "William Nowak",
@@ -117,18 +117,6 @@
         "outbound_sms": 9
       }
     },
-    "2026-08-27": {
-      "user_dQi0iL0igjCKtEXPSsv8ALDZMAz9orJxL60O7Q921jy": {
-        "name": "Vince Bartolini",
-        "meetings_set": 0,
-        "meetings_booked": 1,
-        "meetings_shown": 1,
-        "meetings_closed": 0,
-        "outbound_calls": 0,
-        "outbound_emails": 0,
-        "outbound_sms": 0
-      }
-    },
     "2026-08-24": {
       "user_dQi0iL0igjCKtEXPSsv8ALDZMAz9orJxL60O7Q921jy": {
         "name": "Vince Bartolini",
@@ -138,14 +126,14 @@
         "meetings_closed": 0,
         "outbound_calls": 0,
         "outbound_emails": 618,
-        "outbound_sms": 7795
+        "outbound_sms": 7796
       },
       "user_ZNKG1S9eI71qxhSozBK4jskTVtJqXzfNCPWqmADRR9F": {
         "name": "William Nowak",
         "meetings_set": 2,
         "meetings_booked": 1,
         "meetings_shown": 1,
-        "meetings_closed": 0,
+        "meetings_closed": 2,
         "outbound_calls": 109,
         "outbound_emails": 3,
         "outbound_sms": 18
@@ -159,6 +147,18 @@
         "outbound_calls": 0,
         "outbound_emails": 0,
         "outbound_sms": 186
+      }
+    },
+    "2026-08-27": {
+      "user_dQi0iL0igjCKtEXPSsv8ALDZMAz9orJxL60O7Q921jy": {
+        "name": "Vince Bartolini",
+        "meetings_set": 0,
+        "meetings_booked": 1,
+        "meetings_shown": 1,
+        "meetings_closed": 0,
+        "outbound_calls": 0,
+        "outbound_emails": 0,
+        "outbound_sms": 0
       }
     },
     "2026-08-26": {
@@ -223,11 +223,11 @@
     {
       "user_id": "user_dQi0iL0igjCKtEXPSsv8ALDZMAz9orJxL60O7Q921jy",
       "name": "Vince Bartolini",
-      "activities_mtd_total": 9191,
+      "activities_mtd_total": 9771,
       "activities_breakdown": {
-        "outbound_calls": 45,
-        "outbound_emails": 723,
-        "outbound_sms": 8423
+        "outbound_calls": 65,
+        "outbound_emails": 745,
+        "outbound_sms": 8961
       },
       "meetings_booked_mtd": 9,
       "meetings_shown_mtd": 5,
@@ -246,9 +246,24 @@
       },
       "meetings_booked_mtd": 6,
       "meetings_shown_mtd": 1,
-      "meetings_closed_ever": 0,
-      "meetings_closed_revenue_ever": 0,
-      "meetings_closed_leads": []
+      "meetings_closed_ever": 2,
+      "meetings_closed_revenue_ever": 15894.0,
+      "meetings_closed_leads": [
+        {
+          "lead_id": "lead_rqeJ7gJrRAuLhIE5ie2zW4foQVsQQR3TUOQXoxOF0ne",
+          "lead_name": "Marshawn Fleming",
+          "value": 8997.0,
+          "won_count": 1,
+          "day": "2026-08-24"
+        },
+        {
+          "lead_id": "lead_VNPTHiyOGYUn7zrHruOTpvUn8ov7LjPrCxSKkfK41sz",
+          "lead_name": "Ammon Brown",
+          "value": 6897.0,
+          "won_count": 1,
+          "day": "2026-08-24"
+        }
+      ]
     },
     {
       "user_id": "user_IeWR2TlhpjqoXy3K6jX7u9C8c83iBnHXSIvFZpotF3z",
@@ -275,9 +290,24 @@
       "discovery_set": 6,
       "show_pct": 100.0,
       "inbound_revenue": 0,
-      "outbound_revenue": 0,
+      "outbound_revenue": 15894.0,
       "inbound_leads": [],
-      "outbound_leads": []
+      "outbound_leads": [
+        {
+          "lead_id": "lead_rqeJ7gJrRAuLhIE5ie2zW4foQVsQQR3TUOQXoxOF0ne",
+          "lead_name": "Marshawn Fleming",
+          "value": 8997.0,
+          "won_count": 1,
+          "day": "2026-08-24"
+        },
+        {
+          "lead_id": "lead_VNPTHiyOGYUn7zrHruOTpvUn8ov7LjPrCxSKkfK41sz",
+          "lead_name": "Ammon Brown",
+          "value": 6897.0,
+          "won_count": 1,
+          "day": "2026-08-24"
+        }
+      ]
     }
   ]
 }
