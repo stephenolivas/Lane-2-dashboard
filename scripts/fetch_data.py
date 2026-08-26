@@ -41,43 +41,103 @@ TIMEZONE = ZoneInfo("America/Los_Angeles")
 THROTTLE_SECONDS = 0.1  # Close allows ~60 req/sec; 0.1s = 10 req/sec is safe
 
 # Lane 2 reps. Display order doesn't matter — output is sorted by owned_leads desc.
-LANE_2_REPS = [
-    {"name": "Kelly Schrader",  "user_id": "user_WquWudQN7dghZsAPiNY80eJUmg1EadQg2UCQdvgbif7"},
-    {"name": "Jason Aaron",     "user_id": "user_MrBLkl5wCqTm7QxHxPo2ydNV5KxMllg6YZDVc12Aqzj"},
-]
-LANE_2_USER_IDS = {r["user_id"] for r in LANE_2_REPS}
-
-# Scrapers (a.k.a. setters). They book meetings for the closers.
-# Each entry has the Close user_id (for activity attribution) and the exact
-# string value that the `Reactivation - Setter Name` custom field is set to
-# by the update_field.py automation — see reactivation-setter-name-field.md.
+# Scrapers reach out to leads and book them onto closers' calendars via unique
+# Calendly links. Attribution: the LEAD's `Reactivation - Setter Name` custom
+# field gets stamped with the scraper's name by the update_field.py automation.
+# Each entry needs: Close user_id (for activity attribution — calls/emails/sms)
+# and the exact string in the Setter Name dropdown (case + spaces sensitive).
+#
+# Source of truth for the current roster + Calendly link titles:
+# SCRAPER_SETTER_SETUP_082626.md (in the project files).
+# Amy Mulch is on that doc but excluded here — she doesn't have a Close user
+# account yet, so her activities can't be tracked.
 SCRAPERS = [
-    {"name": "Vince Bartolini",
-     "user_id": "user_dQi0iL0igjCKtEXPSsv8ALDZMAz9orJxL60O7Q921jy",
-     "setter_field_value": "Vince Bartolini"},
-    {"name": "William Nowak",
-     "user_id": "user_ZNKG1S9eI71qxhSozBK4jskTVtJqXzfNCPWqmADRR9F",
-     "setter_field_value": "William Nowak"},
+    {"name": "Charlie Ingram",
+     "user_id": "user_yZWJTiMjUBfJt8pUPQG6hS7QfKUxwt322aYEABSUrQb",
+     "setter_field_value": "Charlie Ingram"},
     {"name": "Jacob Hepner",
      "user_id": "user_IeWR2TlhpjqoXy3K6jX7u9C8c83iBnHXSIvFZpotF3z",
      "setter_field_value": "Jacob Hepner"},
+    {"name": "Vince Bartolini",
+     "user_id": "user_dQi0iL0igjCKtEXPSsv8ALDZMAz9orJxL60O7Q921jy",
+     "setter_field_value": "Vince Bartolini"},
+    {"name": "Pearl Sathekge",
+     "user_id": "user_0SuNg0OWd2reYMeyuDVqiVvjiGcRiFheKKOXXZpyaPZ",
+     "setter_field_value": "Pearl Sathekge"},
+    {"name": "Kelly Schrader",
+     "user_id": "user_WquWudQN7dghZsAPiNY80eJUmg1EadQg2UCQdvgbif7",
+     "setter_field_value": "Kelly Schrader"},
+    {"name": "Jacob Herbig",
+     "user_id": "user_p2y1gLbIgUb9xognGTvuXoRpzp4Ro8QkO20ltgF1CvJ",
+     "setter_field_value": "Jacob Herbig"},
+    {"name": "William Nowak",
+     "user_id": "user_ZNKG1S9eI71qxhSozBK4jskTVtJqXzfNCPWqmADRR9F",
+     "setter_field_value": "William Nowak"},
+    {"name": "August Young",
+     "user_id": "user_wH5PGq1Wm84UW6KrKCt6YCioWocmlffYkbadH6rN43H",
+     "setter_field_value": "August Young"},
+    {"name": "Spencer Reynolds",
+     "user_id": "user_4sfuKGMbv0LQZ4hpS8ipASv406kKTSNP5Xx79jOwSqM",
+     "setter_field_value": "Spencer Reynolds"},
+    {"name": "Cassie Caraballo",
+     "user_id": "user_Hoijs8g8hxab7NN7tMVvC4dpzwHcxSgkIuHeBRphyUL",
+     "setter_field_value": "Cassie Caraballo"},
+    {"name": "Jessica Zatkin",
+     "user_id": "user_WmBJj4uIsE9WRLKMn5Y1i8MinIDJG5GjOHPeX2sUJCp",
+     "setter_field_value": "Jessica Zatkin"},
+    {"name": "Abigail Garza",
+     "user_id": "user_O9qFgDidrldSA1zU3pKPpz5zUbCcNpoEBTCrtAolDUi",
+     "setter_field_value": "Abigail Garza"},
+    {"name": "Connor George",
+     "user_id": "user_YlAbrpKa9iKWFt351Dk1BC4Cmr4SXHKDsSDMG4hnVHi",
+     "setter_field_value": "Connor George"},
+    {"name": "Dana Lesiuk",
+     "user_id": "user_OsKxvuqk3YYRh22NXqonG3PbfFoTC39bn4vGFRKBdMZ",
+     "setter_field_value": "Dana Lesiuk"},
+    {"name": "Naria Torres",
+     "user_id": "user_PBMfAYkPSkMaYK58gXuG70Vu1SLd2bsG3Mvys6RZNgY",
+     "setter_field_value": "Naria Torres"},
+    {"name": "Melia King",
+     "user_id": "user_32021LR58tWOSl2MX2nFVMSP8PoaGV1DjZEF0v0yGXs",
+     "setter_field_value": "Melia King"},
 ]
 
-# Setters hold their own discovery calls (in addition to the calls they book for
-# closers). Each entry pairs a Close user_id with the title prefix used by the
-# Calendly→Close integration; we match meeting activities whose title startswith
-# the prefix and whose user_id matches.
+# Setters have a distinct role from scrapers on this dashboard:
+#   - William Nowak hosts his own Vendingpreneurs Quick Discovery calls, and
+#     also uses a "Vending Consult Call" Calendly link to book follow-ups on
+#     his own calendar after those discoveries. Both surface on the Setter tab.
+#   - Spencer & Pearl do NOT host discovery calls. They appear on the Setter
+#     tab because they're setters in the business flow — the tab shows their
+#     Meetings Set + Inbound / Outbound revenue split for their own bookings.
+#     (Held / Shown will always be zero for them.)
 #
-# For "Set" (meetings_set), we reuse the scraper section's meetings_booked count
-# for this user — the same person is appearing in both tables.
+# Fields per setter:
+#   - discovery_title_prefix (str | None): title prefix for meetings this setter
+#       HOSTS as a discovery call. None means they don't host discos → Held/Shown
+#       are zero and the discovery meetings query is skipped entirely.
+#   - scraper_setter_field_value (str): matches the setter's SCRAPERS entry —
+#       used to bucket their scraper-credited closes as Outbound.
+#   - extra_set_title_prefixes (tuple): additional meeting titles that count
+#       toward "Meetings Set" on the Setter tab beyond what's in the scraper
+#       Meetings Booked. Attribution is via meeting user_id (host of the
+#       meeting), not lead Setter Name — used for links like William's
+#       Vending Consult Call which don't populate Setter Name.
 SETTERS = [
     {"name": "William Nowak",
      "user_id": "user_ZNKG1S9eI71qxhSozBK4jskTVtJqXzfNCPWqmADRR9F",
      "discovery_title_prefix": "Vendingpreneurs Quick Discovery",
-     # If this setter also books calls (Setter Name field), we bucket their
-     # scraper-credited closes as Outbound (unless the lead also has a VQD by
-     # this setter — those are Inbound). Value must match the SCRAPERS entry.
-     "scraper_setter_field_value": "William Nowak"},
+     "scraper_setter_field_value": "William Nowak",
+     "extra_set_title_prefixes": ("Vending Consult Call",)},
+    {"name": "Spencer Reynolds",
+     "user_id": "user_4sfuKGMbv0LQZ4hpS8ipASv406kKTSNP5Xx79jOwSqM",
+     "discovery_title_prefix": None,
+     "scraper_setter_field_value": "Spencer Reynolds",
+     "extra_set_title_prefixes": ()},
+    {"name": "Pearl Sathekge",
+     "user_id": "user_0SuNg0OWd2reYMeyuDVqiVvjiGcRiFheKKOXXZpyaPZ",
+     "discovery_title_prefix": None,
+     "scraper_setter_field_value": "Pearl Sathekge",
+     "extra_set_title_prefixes": ()},
 ]
 
 # Close custom field IDs (verified from sibling dashboards)
@@ -88,15 +148,39 @@ FIELD_FIRST_CALL_BOOKED  = "cf_LFdYEQ6bsgp49YjZzefypDmdVx8iwuakWDSLPLpVrBq"
 FIELD_FIRST_CALL_SHOWUP  = "cf_OPyvpU45RdvjLqfm8V1VWwNxrGKogEH2IBJmfCj0Uhq"
 FIELD_SETTER_NAME        = "cf_vz6kNiu4ItFxRA8Y9HKlWIoQMq3TsdaQqKekQ2YuxVk"
 
+# Meeting outcome IDs (queried from Close org outcomes)
+# Used to determine if a meeting was Shown (previously we used lead's
+# First Call Show Up field, which only tracked the first call; the outcome
+# is per-meeting so it handles 2nd/3rd Next Steps meetings correctly).
+OUTCOME_COMPLETED_ID = "outcome_032Djn4dfeNuEoCunojA7K"
+
 EXCLUDED_FUNNELS = {"LTF - Quiz Funnel"}
 
-# Title prefixes that identify a scraper-booked "Next Steps" meeting. Different
-# closers use slightly different Calendly links. All start with one of these:
+# Title prefixes that identify a scraper-booked "Next Steps" meeting. Each
+# scraper has a unique title on their Calendly link (the automation uses the
+# title to attribute the meeting to them). Source of truth for the current
+# list: SCRAPER_SETTER_SETUP_082626.md.
 NEXT_STEPS_TITLE_PREFIXES = (
-    "Vendingpreneurs Call - Next Steps",
-    "Vendingpreneurs Next Steps Call",
-    "Vendingpreneurs - Next Steps",
-    "Vendingpreneur Next Steps",
+    "Vendingpreneurs - Next Steps Call",       # Charlie Ingram
+    "Vendingpreneurs Call - Next Steps",       # Jacob Hepner
+    "Vendingpreneurs Next Steps Call",         # Vince Bartolini
+    "Vendingpreneurs Next Steps Session",      # Pearl Sathekge
+    "Vendingpreneurs Discovery - Next Steps",  # Kelly Schrader
+    "Vendingpreneurs - Next Steps",            # Jacob Herbig
+    "Vendingpreneur Next Steps",               # William Nowak (reactivations)
+    "Vending Discovery Call - Next Steps",     # August Young
+    "Vending Discovery - Next Steps",          # Spencer Reynolds
+    "Vending Opportunity - Next Steps",        # Cassie Caraballo
+    "Vendingpreneurs Connect - Next Steps",    # Jessica Zatkin
+    "Vending Success - Next Steps",            # Abigail Garza
+    "Vendingpreneurs Momentum - Next Steps",   # Connor George
+    "Vendingpreneurs Launch - Next Steps",     # Dana Lesiuk
+    "Vendingpreneurs Pathway - Next Steps",    # Naria Torres
+    "Vendingpreneurs Blueprint - Next Steps",  # Melia King
+    # NOT included: "Vending Consult Call" (William's follow-up-after-disco
+    # link). That counts on the Setter tab only, via extra_set_title_prefixes.
+    # Also excluded: Amy Mulch's "Vendingpreneurs Strategy - Next Steps" —
+    # she has a Calendly link but no Close user account yet.
 )
 
 # ============================================================================
@@ -326,391 +410,48 @@ def format_week_label(week_start, week_end_inclusive):
             f"{week_end_inclusive.strftime('%b')} {week_end_inclusive.day}, "
             f"{week_end_inclusive.year}")
 
-
 # ============================================================================
-# CALENDAR — leads assigned to Lane 2 reps per day
-# ============================================================================
-
-def fetch_calendar(month_start, month_end):
-    """
-    Walks /event/ for object_type=lead, action=updated, since month_start.
-    For each event whose lead-owner custom field changed to a Lane 2 rep AND
-    whose lead is not on the LTF Quiz Funnel, records (lead_id, PT calendar day,
-    new_owner, handraiser). Dedupes per (lead, day) — events come latest-first
-    from Close so the first event we see for a (lead, day) is the most recent
-    assignment of that day; that rep gets credit.
-
-    Returns (counts, breakdowns, per_rep_per_day):
-      counts:          dict[YYYY-MM-DD] -> int       (total leads that day)
-      breakdowns:      dict[YYYY-MM-DD] -> {handraiser: int}
-      per_rep_per_day: dict[YYYY-MM-DD] -> {user_id: int}
-    """
-    print(f"[calendar] scanning lead.updated events "
-          f"{month_start.date()} → {month_end.date()}", flush=True)
-
-    # day_str -> {lead_id: (owner_user_id, handraiser_value)}
-    # We use a dict so we keep only the FIRST (= latest) event per (lead, day).
-    per_day_lead = defaultdict(dict)
-    excluded_funnel_count = 0
-    not_owner_change = 0
-    not_lane2 = 0
-
-    params = {
-        "object_type": "lead",
-        "action": "updated",
-        "date_updated__gte": month_start.astimezone(timezone.utc)
-                                        .strftime("%Y-%m-%dT%H:%M:%SZ"),
-    }
-
-    event_count = 0
-    for ev in close_paginate_cursor("/event/", params):
-        event_count += 1
-        if event_count % 1000 == 0:
-            page_count = event_count // 50
-            print(f"  [calendar] scanned {event_count} events "
-                  f"(~{page_count} pages), "
-                  f"{sum(len(d) for d in per_day_lead.values())} qualifying so far",
-                  flush=True)
-
-        data = ev.get("data") or {}
-        new_owner  = get_custom(data,                   FIELD_LEAD_OWNER)
-        prev_owner = get_custom(ev.get("previous_data"), FIELD_LEAD_OWNER)
-
-        if new_owner == prev_owner:
-            not_owner_change += 1
-            continue
-        if new_owner not in LANE_2_USER_IDS:
-            not_lane2 += 1
-            continue
-
-        funnel = get_custom(data, FIELD_FUNNEL_NAME)
-        if funnel in EXCLUDED_FUNNELS:
-            excluded_funnel_count += 1
-            continue
-
-        lead_id = ev.get("lead_id") or data.get("id")
-        if not lead_id:
-            continue
-
-        ts = ev.get("date_updated") or ev.get("date_created")
-        if not ts:
-            continue
-        try:
-            dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
-        except ValueError:
-            continue
-        pt_date = dt.astimezone(TIMEZONE).date().isoformat()
-
-        # First event we see for a (lead, day) wins (= latest, since events
-        # are ordered date_updated desc by Close).
-        if lead_id in per_day_lead[pt_date]:
-            continue
-
-        handraiser = get_custom(data, FIELD_HANDRAISER) or "(unset)"
-        per_day_lead[pt_date][lead_id] = (new_owner, handraiser)
-
-    print(f"[calendar] scanned {event_count} events total · "
-          f"{not_owner_change} non-owner-change · "
-          f"{not_lane2} non-Lane2 owner · "
-          f"{excluded_funnel_count} LTF excluded",
-          flush=True)
-
-    counts = {}
-    breakdowns = {}
-    per_rep_per_day = {}
-    for day, leads in per_day_lead.items():
-        counts[day] = len(leads)
-        bd = defaultdict(int)
-        rd = defaultdict(int)
-        for owner, hr in leads.values():
-            bd[hr] += 1
-            rd[owner] += 1
-        breakdowns[day] = dict(sorted(
-            bd.items(),
-            key=lambda kv: (kv[0] == "(unset)", -kv[1], kv[0])
-        ))
-        per_rep_per_day[day] = dict(rd)
-
-    print(f"[calendar] days with activity: {len(counts)} · "
-          f"total qualifying leads: {sum(counts.values())}",
-          flush=True)
-    return counts, breakdowns, per_rep_per_day
-
-
-# ============================================================================
-# REP DETAILS
+# SCRAPERS
 # ============================================================================
 
-def fetch_owned_leads(user_id):
-    """Currently owned leads with handraiser + comm counter, excluding LTF Quiz Funnel."""
-    leads = []
-    q = f'custom.{FIELD_LEAD_OWNER}:"{user_id}"'
-    fields = (
-        f"id,times_communicated,"
-        f"custom.{FIELD_HANDRAISER},"
-        f"custom.{FIELD_FUNNEL_NAME}"
-    )
-    for ld in close_paginate_skip("/lead/", {"query": q, "_fields": fields}):
-        funnel = get_custom(ld, FIELD_FUNNEL_NAME)
-        if funnel in EXCLUDED_FUNNELS:
-            continue
-        leads.append({
-            "id": ld.get("id"),
-            "handraiser": get_custom(ld, FIELD_HANDRAISER),
-            "times_communicated": ld.get("times_communicated") or 0,
-        })
-    return leads
+def fetch_all_scrapers_activities_per_day(scrapers, fetch_start):
+    """Outbound activities per day per scraper — via one org-wide query per
+    activity type, filtered by scraper user_ids client-side.
 
+    Prior version made 3 activity queries × N scrapers = 3N per-user queries.
+    With ~16 scrapers that's 48 round-trips. Bundling to just 3 org-wide
+    queries (call / email / sms) is a major speed-up for a busy org where
+    scrapers do most of the outbound activity anyway. We paginate through more
+    total rows than strictly needed (non-scraper users are filtered out
+    client-side), but pagination is cheap next to per-request overhead.
 
-def fetch_rep_activities_per_day(user_id, fetch_start):
-    """Per-day buckets for each activity type, plus outbound subsets for calls/emails.
-
-    Paginates ALL 5 activity types from `fetch_start` onward — so the same data
-    serves both MTD and WTD aggregations. SMS/notes/meetings used to use the
-    cheaper close_count, but it paginates internally anyway when total_results
-    is missing, so this is the same cost while giving us per-day granularity
-    for the # Activities total in any time window.
+    Per spec, voicemails are NOT counted — the underlying call activity
+    already accounts for the contact attempt.
 
     Returns:
-      {
-        "calls": {day: n},  "calls_outbound": {day: n},
-        "emails": {day: n}, "emails_outbound": {day: n},
-        "sms": {day: n}, "notes": {day: n}, "meetings": {day: n},
-      }
-    """
-    since_iso = fetch_start.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-    base = {"user_id": user_id, "date_created__gte": since_iso}
-
-    def _bucket(path, outbound_values=None):
-        all_pd = defaultdict(int)
-        ob_pd = defaultdict(int)
-        for act in close_paginate_skip(path, base):
-            ts = act.get("date_created")
-            if not ts:
-                continue
-            try:
-                dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
-                day = dt.astimezone(TIMEZONE).date().isoformat()
-            except ValueError:
-                continue
-            all_pd[day] += 1
-            if outbound_values and (act.get("direction") or "").lower() in outbound_values:
-                ob_pd[day] += 1
-        return dict(all_pd), dict(ob_pd)
-
-    calls_pd,    calls_ob_pd   = _bucket("/activity/call/",    {"outbound"})
-    emails_pd,   emails_ob_pd  = _bucket("/activity/email/",   {"outgoing", "outbound"})
-    sms_pd,      _             = _bucket("/activity/sms/")
-    notes_pd,    _             = _bucket("/activity/note/")
-    meetings_pd, _             = _bucket("/activity/meeting/")
-
-    return {
-        "calls":          calls_pd,
-        "calls_outbound": calls_ob_pd,
-        "emails":         emails_pd,
-        "emails_outbound": emails_ob_pd,
-        "sms":            sms_pd,
-        "notes":          notes_pd,
-        "meetings":       meetings_pd,
-    }
-
-
-def fetch_calls_booked_per_day(user_id, fetch_start, fetch_end_exclusive):
-    """Per-day buckets of `First Sales Call Booked Date` for leads owned by `user_id`,
-    over [fetch_start, fetch_end_exclusive]. LTF excluded. Returns {day: count}.
-    """
-    start_d = fetch_start.date().isoformat()
-    end_d   = (fetch_end_exclusive - timedelta(seconds=1)).date().isoformat()
-    q = (
-        f'custom.{FIELD_LEAD_OWNER}:"{user_id}" '
-        f'custom.{FIELD_FIRST_CALL_BOOKED}>="{start_d}" '
-        f'custom.{FIELD_FIRST_CALL_BOOKED}<="{end_d}"'
-    )
-    per_day = defaultdict(int)
-    for ld in close_paginate_skip("/lead/", {
-        "query": q,
-        "_fields": (
-            f"id,custom.{FIELD_FUNNEL_NAME},"
-            f"custom.{FIELD_FIRST_CALL_BOOKED}"
-        ),
-    }):
-        if get_custom(ld, FIELD_FUNNEL_NAME) in EXCLUDED_FUNNELS:
-            continue
-        booked_date = get_custom(ld, FIELD_FIRST_CALL_BOOKED)
-        if not booked_date:
-            continue
-        per_day[booked_date[:10]] += 1
-    return dict(per_day)
-
-
-def fetch_deals_per_day(user_id, fetch_start, fetch_end_exclusive):
-    """Per-day buckets for won and lost deals for this rep, in PT.
-
-    Won:  server-side date_won filter (works).
-    Lost: paginate all, filter client-side on date_lost (server-side filter is silently ignored).
-    LTF excluded via per-lead funnel lookup (cached).
-    Returns (won_per_day, lost_per_day) as plain dicts.
-    """
-    start_iso = fetch_start.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-    end_iso   = fetch_end_exclusive.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-
-    won_records = []   # (lead_id, date_won_str)
-    for opp in close_paginate_skip("/opportunity/", {
-        "user_id": user_id,
-        "status_type": "won",
-        "date_won__gte": start_iso,
-        "date_won__lt":  end_iso,
-        "_fields": "id,lead_id,date_won",
-    }):
-        if opp.get("lead_id") and opp.get("date_won"):
-            won_records.append((opp["lead_id"], opp["date_won"]))
-
-    lost_records = []  # (lead_id, date_lost_str)
-    f_start_utc = fetch_start.astimezone(timezone.utc)
-    f_end_utc   = fetch_end_exclusive.astimezone(timezone.utc)
-    for opp in close_paginate_skip("/opportunity/", {
-        "user_id": user_id,
-        "status_type": "lost",
-        "_fields": "id,lead_id,date_lost",
-    }):
-        date_lost = opp.get("date_lost")
-        if not date_lost:
-            continue
-        try:
-            dt = datetime.fromisoformat(date_lost.replace("Z", "+00:00"))
-        except ValueError:
-            continue
-        if not (f_start_utc <= dt.astimezone(timezone.utc) < f_end_utc):
-            continue
-        if opp.get("lead_id"):
-            lost_records.append((opp["lead_id"], date_lost))
-
-    # LTF exclusion — look up each unique lead's funnel once
-    unique_leads = set(r[0] for r in won_records) | set(r[0] for r in lost_records)
-    funnel_cache = {}
-    for lid in unique_leads:
-        try:
-            ld = close_get(f"/lead/{lid}/",
-                           {"_fields": f"id,custom.{FIELD_FUNNEL_NAME}"})
-            funnel_cache[lid] = get_custom(ld, FIELD_FUNNEL_NAME)
-        except requests.HTTPError:
-            funnel_cache[lid] = None
-
-    def _bucket(records):
-        per_day = defaultdict(int)
-        for lid, date_str in records:
-            if funnel_cache.get(lid) in EXCLUDED_FUNNELS:
-                continue
-            try:
-                dt = datetime.fromisoformat(date_str.replace("Z", "+00:00"))
-            except ValueError:
-                continue
-            per_day[dt.astimezone(TIMEZONE).date().isoformat()] += 1
-        return dict(per_day)
-
-    return _bucket(won_records), _bucket(lost_records)
-
-
-def build_rep_data(rep, fetch_start, fetch_end_exclusive):
-    """Fetch ALL of this rep's data covering [fetch_start, fetch_end_exclusive].
-
-    Returns (snapshot, per_day):
-      snapshot — current-state values (owned_leads, handraiser_breakdown, leads_zero_comms);
-                 same regardless of which period is being viewed.
-      per_day  — flat dict of per-day buckets keyed by metric name:
-                 calls, calls_outbound, emails, emails_outbound, sms, notes, meetings,
-                 calls_booked, deals_won, deals_lost.
-                 Aggregations for MTD / WTD / backfill weeks slice this same dict.
-    """
-    print(f"[rep] {rep['name']}", flush=True)
-    uid = rep["user_id"]
-
-    leads = fetch_owned_leads(uid)
-    handraiser_counts = defaultdict(int)
-    zero_comm = 0
-    for ld in leads:
-        handraiser_counts[ld["handraiser"] or "(unset)"] += 1
-        if ld["times_communicated"] == 0:
-            zero_comm += 1
-    snapshot = {
-        "owned_leads": len(leads),
-        "handraiser_breakdown": dict(sorted(
-            handraiser_counts.items(), key=lambda kv: kv[1], reverse=True
-        )),
-        "leads_zero_comms": zero_comm,
-    }
-
-    act_pd = fetch_rep_activities_per_day(uid, fetch_start)
-    calls_booked_pd = fetch_calls_booked_per_day(uid, fetch_start, fetch_end_exclusive)
-    won_pd, lost_pd = fetch_deals_per_day(uid, fetch_start, fetch_end_exclusive)
-
-    per_day = {
-        **act_pd,                       # calls, calls_outbound, emails, emails_outbound, sms, notes, meetings
-        "calls_booked": calls_booked_pd,
-        "deals_won":    won_pd,
-        "deals_lost":   lost_pd,
-    }
-    return snapshot, per_day
-
-
-def _sum_in_range(per_day_dict, start_date, end_date_exclusive):
-    """Sum values in a per-day dict whose keys fall in [start_date, end_date_exclusive)."""
-    total = 0
-    for day_str, count in (per_day_dict or {}).items():
-        try:
-            d = datetime.strptime(day_str, "%Y-%m-%d").date()
-        except ValueError:
-            continue
-        if start_date <= d < end_date_exclusive:
-            total += count
-    return total
-
-
-def aggregate_rep_for_period(per_day, start_pt, end_exclusive_pt, biz_days):
-    """Aggregate a rep's per-day data into period totals."""
-    s, e = start_pt.date(), end_exclusive_pt.date()
-    calls    = _sum_in_range(per_day.get("calls"),    s, e)
-    emails   = _sum_in_range(per_day.get("emails"),   s, e)
-    sms      = _sum_in_range(per_day.get("sms"),      s, e)
-    notes    = _sum_in_range(per_day.get("notes"),    s, e)
-    meetings = _sum_in_range(per_day.get("meetings"), s, e)
-    ob_calls  = _sum_in_range(per_day.get("calls_outbound"),  s, e)
-    ob_emails = _sum_in_range(per_day.get("emails_outbound"), s, e)
-    return {
-        "activities":      calls + emails + sms + notes + meetings,
-        "outbound_calls":  ob_calls,
-        "outbound_emails": ob_emails,
-        "outbound_calls_per_day_avg":  round(ob_calls  / max(biz_days, 1), 1),
-        "outbound_emails_per_day_avg": round(ob_emails / max(biz_days, 1), 1),
-        "calls_booked":  _sum_in_range(per_day.get("calls_booked"), s, e),
-        "deals_closed":  _sum_in_range(per_day.get("deals_won"),    s, e),
-        "deals_lost":    _sum_in_range(per_day.get("deals_lost"),   s, e),
-    }
-
-
-# ============================================================================
-# SCRAPERS (setters)
-# ============================================================================
-
-def fetch_scraper_activities_per_day(user_id, fetch_start):
-    """Outbound-only activities for this scraper from fetch_start onward.
-
-    Per spec, voicemails are NOT counted — the underlying call activity already
-    accounts for the contact attempt.
-
-    Returns:
-      {
+      {scraper_user_id: {
         "outbound_calls":  {day: n},
         "outbound_emails": {day: n},
         "outbound_sms":    {day: n},
-      }
+      }}
     """
+    scraper_uids = {s["user_id"] for s in scrapers}
     since_iso = fetch_start.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-    base = {"user_id": user_id, "date_created__gte": since_iso}
 
-    def _bucket(path, outbound_values):
-        per_day = defaultdict(int)
-        for act in close_paginate_skip(path, base):
+    result = {uid: {
+        "outbound_calls":  defaultdict(int),
+        "outbound_emails": defaultdict(int),
+        "outbound_sms":    defaultdict(int),
+    } for uid in scraper_uids}
+
+    def _bucket(path, outbound_values, bucket_name):
+        n_total = 0
+        n_scraper = 0
+        for act in close_paginate_skip(path, {"date_created__gte": since_iso}):
+            n_total += 1
+            uid = act.get("user_id")
+            if uid not in scraper_uids:
+                continue
             if (act.get("direction") or "").lower() not in outbound_values:
                 continue
             ts = act.get("date_created")
@@ -718,16 +459,19 @@ def fetch_scraper_activities_per_day(user_id, fetch_start):
                 continue
             try:
                 dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
-                per_day[dt.astimezone(TIMEZONE).date().isoformat()] += 1
+                day = dt.astimezone(TIMEZONE).date().isoformat()
+                result[uid][bucket_name][day] += 1
+                n_scraper += 1
             except ValueError:
                 pass
-        return dict(per_day)
+        print(f"  {path}: {n_scraper} scraper items / {n_total} total org-wide",
+              flush=True)
 
-    return {
-        "outbound_calls":  _bucket("/activity/call/",  {"outbound"}),
-        "outbound_emails": _bucket("/activity/email/", {"outgoing", "outbound"}),
-        "outbound_sms":    _bucket("/activity/sms/",   {"outbound", "outgoing"}),
-    }
+    _bucket("/activity/call/",  {"outbound"},              "outbound_calls")
+    _bucket("/activity/email/", {"outgoing", "outbound"},  "outbound_emails")
+    _bucket("/activity/sms/",   {"outbound", "outgoing"},  "outbound_sms")
+
+    return {uid: {k: dict(v) for k, v in data.items()} for uid, data in result.items()}
 
 
 def _lead_has_vqd_by(lead_id, setter_uid, title_prefix):
@@ -936,15 +680,6 @@ def fetch_scraper_closes_per_day(scrapers, fetch_start, fetch_end_exclusive):
     return scraper_result
 
 
-def build_scraper_data(scraper, fetch_start, fetch_end_exclusive):
-    """Fetch scraper ACTIVITY data (outbound calls / emails / sms) covering
-    [fetch_start, fetch_end_exclusive]. Meetings Set / Booked / Shown are
-    populated separately in main() via `fetch_scraper_meetings_bulk`.
-    """
-    print(f"[scraper] {scraper['name']}", flush=True)
-    return fetch_scraper_activities_per_day(scraper["user_id"], fetch_start)
-
-
 def _is_next_steps(title):
     """Does this meeting title identify a scraper-booked Next Steps meeting?"""
     if not title:
@@ -975,11 +710,9 @@ def fetch_scraper_meetings_bulk(scrapers, meetings_set_start,
         matches one of NEXT_STEPS_TITLE_PREFIXES count. This replaces the older
         `First Sales Call Booked Date` lead-side approach, which missed any
         second/third Next Steps meeting on the same lead.
-      - **Meetings Shown** — subset of Booked where the lead's
-        `First Call Show Up (Opp)` field is "Yes". This field is per-lead (not
-        per-meeting), so all Next Steps meetings on a lead where the first call
-        showed are counted as shown. Coarser than ideal but matches how the
-        field is populated today; the user is planning a follow-up on this.
+      - **Meetings Shown** — subset of Booked where the meeting's
+        `outcome_id` is Completed. Per-meeting attribute, so a lead with
+        multiple Next Steps meetings each get their own shown determination.
 
     Pre-screens each meeting before hitting the lead endpoint: if a meeting's
     date_created isn't in Set range AND its title/starts_at don't qualify for
@@ -1014,7 +747,8 @@ def fetch_scraper_meetings_bulk(scrapers, meetings_set_start,
     bs_lo_d  = fetch_start.date()
     bs_hi_d  = fetch_end_exclusive.date()
 
-    # lead_id -> (setter_field_value or None, showed_bool)
+    # lead_id -> setter_field_value (or None if lead doesn't attribute to any
+    # configured scraper). No shown state cached — shown is per-meeting now.
     lead_cache = {}
 
     result = {
@@ -1061,21 +795,19 @@ def fetch_scraper_meetings_bulk(scrapers, meetings_set_start,
                 ld = close_get(f"/lead/{lead_id}/", {
                     "_fields": (
                         f"id,custom.{FIELD_SETTER_NAME},"
-                        f"custom.{FIELD_FUNNEL_NAME},"
-                        f"custom.{FIELD_FIRST_CALL_SHOWUP}"
+                        f"custom.{FIELD_FUNNEL_NAME}"
                     )
                 })
                 funnel = get_custom(ld, FIELD_FUNNEL_NAME)
                 setter = (get_custom(ld, FIELD_SETTER_NAME) or "").strip()
-                showed = (get_custom(ld, FIELD_FIRST_CALL_SHOWUP) or "").strip().lower() == "yes"
                 if funnel == "Reactivation Scrapers" and setter in setter_to_uid:
-                    lead_cache[lead_id] = (setter, showed)
+                    lead_cache[lead_id] = setter
                 else:
-                    lead_cache[lead_id] = (None, False)
+                    lead_cache[lead_id] = None
             except requests.HTTPError:
-                lead_cache[lead_id] = (None, False)
+                lead_cache[lead_id] = None
 
-        setter, showed = lead_cache[lead_id]
+        setter = lead_cache[lead_id]
         if not setter:
             continue
 
@@ -1088,7 +820,7 @@ def fetch_scraper_meetings_bulk(scrapers, meetings_set_start,
         if booked_candidate:
             result[uid]["meetings_booked"][sa_day.isoformat()] += 1
             n_booked += 1
-            if showed:
+            if _meeting_shown(mtg):
                 result[uid]["meetings_shown"][sa_day.isoformat()] += 1
                 n_shown += 1
 
@@ -1141,94 +873,88 @@ def aggregate_scraper_for_period(per_day, start_pt, end_exclusive_pt):
 
 # ─ Setter discovery meetings ─────────────────────────────────────────────────
 
-def _meeting_shown(meeting, host_user_id):
-    """A discovery meeting is "shown" iff:
-       - the meeting status is NOT canceled, AND
-       - the host's attendee entry is NOT "declined"
-    A no-show in this workflow surfaces as either (a) William declining the
-    invite from his calendar (the Calendly→Close integration syncs that back
-    as a declined attendee status), or (b) the meeting being canceled outright.
+def _meeting_shown(meeting):
+    """A meeting counts as "shown" iff its outcome_id is Completed.
+
+    We switched from the earlier attendee-based check (canceled meeting OR host
+    attendee status=declined) to the native meeting outcome field. The outcome
+    is a per-meeting attribute set by whoever runs the call in Close, so it
+    correctly handles 2nd/3rd Next Steps meetings on the same lead — the older
+    approach that relied on the LEAD's `First Call Show Up` field could only
+    ever tell us about the first call.
     """
-    status = (meeting.get("status") or "").lower()
-    if status in ("canceled", "cancelled", "no-show"):
-        return False
-    for att in (meeting.get("attendees") or []):
-        # Match by user_id (internal attendee) — anonymous external attendees
-        # don't have user_id populated.
-        if att.get("user_id") == host_user_id:
-            if (att.get("attendance_status") or "").lower() == "declined":
-                return False
-            break
-    return True
+    return meeting.get("outcome_id") == OUTCOME_COMPLETED_ID
 
 
 def fetch_setter_discovery_per_day(setter, fetch_start, fetch_end_exclusive):
-    """Per-day buckets of discovery meetings this setter hosts.
+    """Per-day counts for a setter's own meetings, in three buckets:
 
-    A "discovery meeting" = an /activity/meeting/ activity where:
-      - user_id == setter's user_id (this person hosts the call), AND
-      - title.startswith(setter['discovery_title_prefix']) (e.g. "Vendingpreneurs Quick Discovery")
+      - discovery_held  — meetings this setter HOSTS as a discovery call
+        (title.startswith(discovery_title_prefix)), bucketed by starts_at PT
+      - discovery_shown — subset of held where outcome = Completed
+      - extra_set       — meetings whose title matches any of
+        `extra_set_title_prefixes` (e.g. William's Vending Consult Call),
+        credited to this setter via meeting user_id and bucketed by
+        date_created PT. Adds to the setter's Meetings Set on the tab.
 
-    Day = the meeting's `starts_at` (when it happened), bucketed in PT.
-    `discovery_shown` is the subset that was not declined/canceled.
+    Setters without a `discovery_title_prefix` (Spencer, Pearl) return zero
+    counts for held / shown — the per-lead activity queries are skipped
+    entirely for them.
 
     Returns:
-      {
-        "discovery_held":  {day: int},
-        "discovery_shown": {day: int},
-      }
+      {"discovery_held": {day: int},
+       "discovery_shown": {day: int},
+       "extra_set": {day: int}}
     """
     uid = setter["user_id"]
-    prefix = setter["discovery_title_prefix"]
-    since_iso = fetch_start.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-    end_iso   = fetch_end_exclusive.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    disco_prefix = setter.get("discovery_title_prefix")
+    extra_prefixes = tuple(setter.get("extra_set_title_prefixes") or ())
 
     held_pd  = defaultdict(int)
     shown_pd = defaultdict(int)
+    extra_pd = defaultdict(int)
+
+    # Nothing to fetch → skip the API call entirely.
+    if not disco_prefix and not extra_prefixes:
+        return {"discovery_held": {}, "discovery_shown": {}, "extra_set": {}}
+
+    since_iso = fetch_start.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    fs_d = fetch_start.date()
+    fe_d = fetch_end_exclusive.date()
     seen = 0
 
-    # We extend the filter to date_created__gte=fetch_start because Close's
-    # /activity/meeting/ filters on date_created, not starts_at. Most discovery
-    # meetings are created shortly before they happen so this is fine — we
-    # still bucket by starts_at PT, the date the meeting actually occurred.
     for mtg in close_paginate_skip("/activity/meeting/", {
         "user_id":           uid,
         "date_created__gte": since_iso,
     }):
         seen += 1
         title = (mtg.get("title") or "")
-        if not title.startswith(prefix):
-            continue
 
-        starts_at = mtg.get("starts_at")
-        if not starts_at:
-            continue
-        try:
-            dt = datetime.fromisoformat(starts_at.replace("Z", "+00:00"))
-        except ValueError:
-            continue
-        day_pt = dt.astimezone(TIMEZONE).date()
+        # ─ Discovery held / shown (bucketed by starts_at) ─
+        if disco_prefix and title.startswith(disco_prefix):
+            sa_day = _parse_pt_day(mtg.get("starts_at"))
+            if sa_day is not None and fs_d <= sa_day < fe_d:
+                day = sa_day.isoformat()
+                held_pd[day] += 1
+                if _meeting_shown(mtg):
+                    shown_pd[day] += 1
 
-        # starts_at could be earlier than fetch_start (rare — old meetings
-        # backfilled into the fetch window) or after fetch_end_exclusive
-        # (upcoming meetings). Either is fine — we keep them, and the
-        # period aggregation slices by day at output time.
-        if day_pt < fetch_start.date() or day_pt >= fetch_end_exclusive.date():
-            # Outside the fetch window we care about — skip
-            continue
-
-        day = day_pt.isoformat()
-        held_pd[day]  += 1
-        if _meeting_shown(mtg, uid):
-            shown_pd[day] += 1
+        # ─ Extra set (bucketed by date_created) — e.g. Vending Consult Call ─
+        if extra_prefixes and any(title.startswith(p) for p in extra_prefixes):
+            dc_day = _parse_pt_day(mtg.get("date_created"))
+            if dc_day is not None and fs_d <= dc_day < fe_d:
+                extra_pd[dc_day.isoformat()] += 1
 
     print(f"  setter {setter['name']}: {sum(held_pd.values())} held, "
-          f"{sum(shown_pd.values())} shown (scanned {seen} meetings)",
+          f"{sum(shown_pd.values())} shown, "
+          f"{sum(extra_pd.values())} extra-set (scanned {seen} meetings)",
           flush=True)
 
     return {
         "discovery_held":  dict(held_pd),
         "discovery_shown": dict(shown_pd),
+        "extra_set":       dict(extra_pd),
     }
 
 
@@ -1236,17 +962,22 @@ def aggregate_setter_for_period(per_day, start_pt, end_exclusive_pt,
                                   scraper_per_day=None):
     """Aggregate a setter's per-day data into period totals.
 
-    `scraper_per_day` lets us pull "Discovery Set" from the matching scraper's
-    meetings_booked bucket — same setter, same booking event, no second API call.
+    `scraper_per_day` lets us pull most of "Discovery Set" from the matching
+    scraper's meetings_booked bucket (same person, same booking event, no
+    extra API call). Any "extra_set" bookings (e.g. William's Vending Consult
+    Call follow-ups, which don't populate Setter Name so aren't in the scraper
+    count) are added on top.
+
     Inbound / Outbound revenue come from the setter's own per_day buckets that
     were populated by fetch_closes_per_day.
     """
     s, e = start_pt.date(), end_exclusive_pt.date()
     held  = _sum_in_range(per_day.get("discovery_held"),  s, e)
     shown = _sum_in_range(per_day.get("discovery_shown"), s, e)
-    set_count = 0
+    extra_set = _sum_in_range(per_day.get("extra_set"), s, e)
+    set_count = extra_set
     if scraper_per_day:
-        set_count = _sum_in_range(scraper_per_day.get("meetings_booked"), s, e)
+        set_count += _sum_in_range(scraper_per_day.get("meetings_booked"), s, e)
     show_pct = round(100.0 * shown / held, 1) if held else 0.0
 
     # Inbound / Outbound revenue + lead lists (sliced to period, sorted by value desc)
@@ -1292,45 +1023,6 @@ def _slice_dict_by_date(d, start_date, end_exclusive_date):
             continue
         if start_date <= dd < end_exclusive_date:
             out[k] = v
-    return out
-
-
-def _build_daily_breakdowns(rep_meta, rep_per_day_by_uid, calendar_per_rep_per_day,
-                             start_pt, end_exclusive_pt):
-    """Build the {day: {user_id: {name, new_leads, outbound_calls, outbound_emails,
-                                   calls_booked, deals_closed}}} structure that powers
-       the rep-view click drill-down, for the given date range."""
-    s, e = start_pt.date(), end_exclusive_pt.date()
-    out = {}
-    for meta in rep_meta:
-        uid = meta["user_id"]
-        pd = rep_per_day_by_uid.get(uid, {})
-        # Days where this rep had any activity in the period
-        candidate_days = (
-            set(pd.get("calls_outbound", {})) |
-            set(pd.get("emails_outbound", {})) |
-            set(pd.get("calls_booked", {})) |
-            set(pd.get("deals_won", {}))
-        )
-        for day, by_rep in calendar_per_rep_per_day.items():
-            if by_rep.get(uid):
-                candidate_days.add(day)
-        for day in candidate_days:
-            try:
-                dd = datetime.strptime(day, "%Y-%m-%d").date()
-            except ValueError:
-                continue
-            if not (s <= dd < e):
-                continue
-            row = {
-                "new_leads":       calendar_per_rep_per_day.get(day, {}).get(uid, 0),
-                "outbound_calls":  pd.get("calls_outbound",  {}).get(day, 0),
-                "outbound_emails": pd.get("emails_outbound", {}).get(day, 0),
-                "calls_booked":    pd.get("calls_booked",    {}).get(day, 0),
-                "deals_closed":    pd.get("deals_won",       {}).get(day, 0),
-            }
-            if any(row.values()):
-                out.setdefault(day, {})[uid] = {"name": meta["name"], **row}
     return out
 
 
@@ -1394,32 +1086,6 @@ def _build_scraper_calendar(scraper_meta, scraper_per_day_by_uid,
             counts[day] = counts.get(day, 0) + n
             breakdowns[day][meta["name"]] = n
     return counts, dict(breakdowns)
-
-
-def _build_rep_view(rep_meta, rep_per_day_by_uid, start_pt, end_exclusive_pt, biz_days,
-                     legacy_suffix="_mtd"):
-    """Build the `reps` array for an output file. legacy_suffix is "_mtd" for both
-    the live data.json and archives — the HTML already reads those names, and using
-    them for weekly archives too means the rep-details renderer works unchanged.
-    """
-    out = []
-    for meta in rep_meta:
-        uid = meta["user_id"]
-        pd = rep_per_day_by_uid.get(uid, {})
-        agg = aggregate_rep_for_period(pd, start_pt, end_exclusive_pt, biz_days)
-        out.append({
-            **meta,
-            f"activities{legacy_suffix}":      agg["activities"],
-            f"outbound_calls{legacy_suffix}":  agg["outbound_calls"],
-            f"outbound_emails{legacy_suffix}": agg["outbound_emails"],
-            "outbound_calls_per_day_avg":      agg["outbound_calls_per_day_avg"],
-            "outbound_emails_per_day_avg":     agg["outbound_emails_per_day_avg"],
-            f"calls_booked{legacy_suffix}":    agg["calls_booked"],
-            f"deals_closed{legacy_suffix}":    agg["deals_closed"],
-            f"deals_lost{legacy_suffix}":      agg["deals_lost"],
-        })
-    out.sort(key=lambda x: x["owned_leads"], reverse=True)
-    return out
 
 
 def _build_scraper_view(scraper_meta, scraper_per_day_by_uid, start_pt, end_exclusive_pt):
@@ -1517,10 +1183,10 @@ def main():
     biz_days_mtd = business_days_elapsed(now)
     biz_days_wtd = business_days_elapsed_wtd(now, week_start, week_end_excl)
 
-    # Backfill the previous 2 completed weeks (per spec). Extend fetch range
-    # back to the earliest needed Monday so all per-day data is captured in
-    # one pass.
-    backfill_weeks = prev_n_weeks(week_start, 2)
+    # Backfill the previous 1 completed week (reduced from 2 to keep runtime
+    # under the 15-min cron budget with the larger scraper roster). If a week
+    # needs a rebuild older than that, use BACKFILL_MONTH.
+    backfill_weeks = prev_n_weeks(week_start, 1)
     earliest_week = min([week_start] + [bw["start"] for bw in backfill_weeks])
     fetch_start = min(month_start, earliest_week)
 
@@ -1532,30 +1198,18 @@ def main():
     print(f"Backfill weeks: {[bw['label'] for bw in backfill_weeks]}", flush=True)
     print(f"Fetch from: {fetch_start.date()} (covers all of the above)\n", flush=True)
 
-    # ─ Calendar (lead.updated events) ─────────────────────────────────────
-    cal_counts_all, cal_breakdowns_all, cal_per_rep_per_day_all = fetch_calendar(
-        fetch_start, month_end
-    )
-
-    # ─ Per-rep data ───────────────────────────────────────────────────────
-    print("", flush=True)
-    rep_meta = []        # {user_id, name, owned_leads, handraiser_breakdown, leads_zero_comms}
-    rep_per_day_by_uid = {}
-    for rep_cfg in LANE_2_REPS:
-        snap, per_day = build_rep_data(rep_cfg, fetch_start, month_end)
-        rep_meta.append({"user_id": rep_cfg["user_id"],
-                          "name": rep_cfg["name"], **snap})
-        rep_per_day_by_uid[rep_cfg["user_id"]] = per_day
-
-    # ─ Per-scraper data ───────────────────────────────────────────────────
-    print("", flush=True)
-    scraper_meta = []
-    scraper_per_day_by_uid = {}
-    for scr_cfg in SCRAPERS:
-        per_day = build_scraper_data(scr_cfg, fetch_start, month_end)
-        scraper_meta.append({"user_id": scr_cfg["user_id"],
-                              "name": scr_cfg["name"]})
-        scraper_per_day_by_uid[scr_cfg["user_id"]] = per_day
+    # ─ Per-scraper activity (batched org-wide, filtered client-side) ──────
+    # One org-wide query per activity type covers all scrapers in one pass —
+    # far fewer API round-trips than looping per-scraper with the current
+    # 16-person roster.
+    print("[scrapers] fetching outbound activities (batched org-wide)", flush=True)
+    activity_by_uid = fetch_all_scrapers_activities_per_day(SCRAPERS, fetch_start)
+    scraper_meta = [{"user_id": s["user_id"], "name": s["name"]} for s in SCRAPERS]
+    scraper_per_day_by_uid = {
+        s["user_id"]: activity_by_uid.get(s["user_id"], {
+            "outbound_calls": {}, "outbound_emails": {}, "outbound_sms": {},
+        }) for s in SCRAPERS
+    }
 
     # Close-date attribution for scraper closes / revenue AND setter Inbound /
     # Outbound revenue.  Single org-wide opp query + one lead lookup each →
@@ -1598,33 +1252,10 @@ def main():
             scraper_per_day_by_uid[uid]["meetings_shown"]  = metrics["meetings_shown"]
 
     # ─ Assemble views for MTD + current WTD ───────────────────────────────
-    reps_mtd     = _build_rep_view(rep_meta, rep_per_day_by_uid,
-                                    month_start, month_end, biz_days_mtd)
-    reps_wtd     = _build_rep_view(rep_meta, rep_per_day_by_uid,
-                                    week_start, week_end_excl, biz_days_wtd)
     scrapers_mtd = _build_scraper_view(scraper_meta, scraper_per_day_by_uid,
                                          month_start, month_end)
     scrapers_wtd = _build_scraper_view(scraper_meta, scraper_per_day_by_uid,
                                          week_start, week_end_excl)
-
-    # Merge: each rep/scraper has top-level MTD fields + `wtd` sub-block. The
-    # rep snapshots (owned/handraiser/0-comms) live at the top level — they're
-    # "snapshot now" regardless of view, per the locked spec.
-    by_uid_wtd_reps = {r["user_id"]: r for r in reps_wtd}
-    reps_combined = []
-    for r in reps_mtd:
-        w = by_uid_wtd_reps.get(r["user_id"], {})
-        wtd_block = {
-            "activities":                  w.get("activities_mtd", 0),
-            "outbound_calls":              w.get("outbound_calls_mtd", 0),
-            "outbound_emails":             w.get("outbound_emails_mtd", 0),
-            "outbound_calls_per_day_avg":  w.get("outbound_calls_per_day_avg", 0),
-            "outbound_emails_per_day_avg": w.get("outbound_emails_per_day_avg", 0),
-            "calls_booked":                w.get("calls_booked_mtd", 0),
-            "deals_closed":                w.get("deals_closed_mtd", 0),
-            "deals_lost":                  w.get("deals_lost_mtd", 0),
-        }
-        reps_combined.append({**r, "wtd": wtd_block})
 
     by_uid_wtd_scr = {s["user_id"]: s for s in scrapers_wtd}
     scrapers_combined = []
@@ -1691,28 +1322,8 @@ def main():
         }
         setters_combined.append({**sm, "wtd": wtd_block})
 
-    # ─ Calendar slicing ───────────────────────────────────────────────────
-    full_month_calendar = {
-        d.isoformat(): cal_counts_all.get(d.isoformat(), 0)
-        for d in days_in_month(month_start, month_end)
-    }
-    month_cal_breakdowns = _slice_dict_by_date(
-        cal_breakdowns_all, month_start.date(), month_end.date()
-    )
-    daily_breakdowns_mtd = _build_daily_breakdowns(
-        rep_meta, rep_per_day_by_uid, cal_per_rep_per_day_all,
-        month_start, month_end
-    )
-
+    # ─ Calendar slicing (scraper calendar only — rep view retired) ────────
     week_days = _mon_to_fri(week_start)
-    week_calendar = {d: cal_counts_all.get(d, 0) for d in week_days}
-    week_cal_breakdowns = _slice_dict_by_date(
-        cal_breakdowns_all, week_start.date(), week_end_excl.date()
-    )
-    daily_breakdowns_wtd = _build_daily_breakdowns(
-        rep_meta, rep_per_day_by_uid, cal_per_rep_per_day_all,
-        week_start, week_end_excl
-    )
 
     month_scraper_calendar, month_scraper_cal_breakdowns = _build_scraper_calendar(
         scraper_meta, scraper_per_day_by_uid,
@@ -1740,27 +1351,28 @@ def main():
         "month_end": (month_end - timedelta(days=1)).date().isoformat(),
         "today": now.date().isoformat(),
         "business_days_elapsed": biz_days_mtd,
-        # NEW: week-level metadata + data
         "week_start": week_start.date().isoformat(),
         "week_end": (week_end_excl - timedelta(days=1)).date().isoformat(),
         "week_label": format_week_label(week_start, week_end_excl - timedelta(days=1)),
         "business_days_elapsed_wtd": biz_days_wtd,
-        # Existing month-level calendar data
-        "calendar": full_month_calendar,
-        "calendar_breakdowns": month_cal_breakdowns,
-        "daily_breakdowns": daily_breakdowns_mtd,
+        # Scraper calendar data — MTD
         "scraper_calendar": month_scraper_calendar,
         "scraper_calendar_breakdowns": month_scraper_cal_breakdowns,
         "scraper_daily_breakdowns": scraper_daily_breakdowns_mtd,
-        # NEW: week-level calendar data
-        "week_calendar": week_calendar,
-        "week_calendar_breakdowns": week_cal_breakdowns,
-        "week_daily_breakdowns": daily_breakdowns_wtd,
+        # Scraper calendar data — WTD
         "scraper_week_calendar": week_scraper_calendar,
         "scraper_week_calendar_breakdowns": week_scraper_cal_breakdowns,
         "scraper_week_daily_breakdowns": scraper_daily_breakdowns_wtd,
-        # Reps + scrapers (top-level MTD, wtd sub-block)
-        "reps": reps_combined,
+        # Rep-related fields kept as empty for HTML backwards compat.
+        # The rep view has been fully removed; these will render as no-ops.
+        "calendar": {},
+        "calendar_breakdowns": {},
+        "daily_breakdowns": {},
+        "week_calendar": {},
+        "week_calendar_breakdowns": {},
+        "week_daily_breakdowns": {},
+        "reps": [],
+        # Scrapers + setters
         "scrapers": scrapers_combined,
         "setters": setters_combined,
     }
@@ -1786,22 +1398,13 @@ def main():
         """A week-shaped file: top-level fields hold THAT week's data (no `wtd`
         nesting). Field names keep their `_mtd`/`_ever` suffixes so the existing
         HTML renderer reads them unchanged."""
-        wdays = _mon_to_fri(ws)
-        cal = {d: cal_counts_all.get(d, 0) for d in wdays}
-        cal_bd = _slice_dict_by_date(cal_breakdowns_all, ws.date(), we_excl.date())
-        daily_bd = _build_daily_breakdowns(
-            rep_meta, rep_per_day_by_uid, cal_per_rep_per_day_all, ws, we_excl
-        )
         scr_cal, scr_cal_bd = _build_scraper_calendar(
-            scraper_meta, scraper_per_day_by_uid, ws, we_excl, wdays
+            scraper_meta, scraper_per_day_by_uid, ws, we_excl, _mon_to_fri(ws)
         )
         scr_daily_bd = _build_scraper_daily_breakdowns(
             scraper_meta, scraper_per_day_by_uid, ws, we_excl
         )
 
-        # Reps & scrapers & setters — period totals at top level (this whole file IS the period)
-        rep_view     = _build_rep_view(rep_meta, rep_per_day_by_uid,
-                                        ws, we_excl, biz_days)
         scraper_view = _build_scraper_view(scraper_meta, scraper_per_day_by_uid,
                                             ws, we_excl)
         setter_view  = []
@@ -1828,13 +1431,14 @@ def main():
             "today":       (we_excl - timedelta(days=1)).date().isoformat(),
             "business_days_elapsed": biz_days,
             "business_days_elapsed_wtd": biz_days,
-            "calendar": cal,
-            "calendar_breakdowns": cal_bd,
-            "daily_breakdowns": daily_bd,
             "scraper_calendar": scr_cal,
             "scraper_calendar_breakdowns": scr_cal_bd,
             "scraper_daily_breakdowns": scr_daily_bd,
-            "reps": rep_view,
+            # Empty rep-related fields kept for HTML backwards compat
+            "calendar": {},
+            "calendar_breakdowns": {},
+            "daily_breakdowns": {},
+            "reps": [],
             "scrapers": scraper_view,
             "setters": setter_view,
         }
