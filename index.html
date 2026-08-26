@@ -758,7 +758,7 @@ const WEEK_DAY_LABELS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri'];
 // Cached so the side-panel click handler can access without re-fetching
 let RAW_DATA = null;             // original fetch (data.json or an archive file)
 let DATA = null;                 // adapted view: what render() actually consumes
-let CURRENT_VIEW   = 'reps';     // 'reps' or 'scrapers' — Rep/Scraper details toggle
+let CURRENT_VIEW   = 'scrapers'; // 'scrapers' or 'setters' — details tab toggle
 let CURRENT_PERIOD = 'month';    // 'month' or 'week' — Period toggle
 let INDEX = { months: [], weeks: [] };   // archives/index.json contents
 
@@ -986,100 +986,6 @@ function renderBreakdown(breakdown) {
   </div>`;
 }
 
-function renderReps(data) {
-  const reps = data.reps || [];
-  if (!reps.length) return '<p style="padding:20px;color:var(--text-muted)">No reps configured.</p>';
-
-  const bizDays = Math.max(data.business_days_elapsed || 1, 1);
-  const weekView = isWeekView(data);
-  const snapTag = weekView ? '<span class="snap-label">snapshot&nbsp;now</span>' : '';
-
-  // Aggregate handraiser breakdown for the totals row
-  const aggBreak = {};
-  let aggOwned = 0, aggActs = 0, aggZero = 0, aggCallsMtd = 0, aggEmailsMtd = 0,
-      aggBooked = 0, aggWon = 0, aggLost = 0;
-
-  for (const r of reps) {
-    aggOwned += r.owned_leads || 0;
-    aggActs += r.activities_mtd || 0;
-    aggZero += r.leads_zero_comms || 0;
-    aggCallsMtd += r.outbound_calls_mtd || 0;
-    aggEmailsMtd += r.outbound_emails_mtd || 0;
-    aggBooked += r.calls_booked_mtd || 0;
-    aggWon += r.deals_closed_mtd || 0;
-    aggLost += r.deals_lost_mtd || 0;
-    for (const [k, v] of Object.entries(r.handraiser_breakdown || {})) {
-      aggBreak[k] = (aggBreak[k] || 0) + v;
-    }
-  }
-  const aggCallsAvg  = (aggCallsMtd  / bizDays).toFixed(1);
-  const aggEmailsAvg = (aggEmailsMtd / bizDays).toFixed(1);
-
-  const fmtAvg = (n) => (n == null ? '—' : Number(n).toFixed(1));
-
-  const rows = reps.map(r => {
-    const zeroAttn = (r.leads_zero_comms || 0) > 0;
-    return `
-      <tr>
-        <td>
-          <div class="rep-name">
-            ${r.name}
-            ${r.is_lead ? '<span class="lead-badge">Lead</span>' : ''}
-          </div>
-        </td>
-        <td class="owned-cell">
-          <div class="owned-total">Total = ${fmtInt(r.owned_leads)}</div>
-          ${renderBreakdown(r.handraiser_breakdown)}
-        </td>
-        <td class="num">${fmtInt(r.activities_mtd)}</td>
-        <td class="num zero-cell ${zeroAttn ? 'attention' : ''}">${fmtInt(r.leads_zero_comms)}</td>
-        <td class="num" title="${r.outbound_calls_mtd || 0} total / ${bizDays} business days">${fmtAvg(r.outbound_calls_per_day_avg)}</td>
-        <td class="num" title="${r.outbound_emails_mtd || 0} total / ${bizDays} business days">${fmtAvg(r.outbound_emails_per_day_avg)}</td>
-        <td class="num">${fmtInt(r.calls_booked_mtd)}</td>
-        <td class="num">${fmtInt(r.deals_closed_mtd)}</td>
-        <td class="num">${fmtInt(r.deals_lost_mtd)}</td>
-      </tr>
-    `;
-  }).join('');
-
-  return `
-    <div class="reps-table-wrap">
-      <table class="reps">
-        <thead>
-          <tr>
-            <th>Rep</th>
-            <th># Owned Leads${snapTag}</th>
-            <th class="num"># Activities</th>
-            <th class="num">Leads w/ 0 Comms${snapTag}</th>
-            <th class="num">Avg Outbound Calls /day</th>
-            <th class="num">Avg Outbound Emails /day</th>
-            <th class="num">Calls Booked</th>
-            <th class="num">Deals Closed</th>
-            <th class="num">Deals Lost</th>
-          </tr>
-        </thead>
-        <tbody>
-          ${rows}
-          <tr class="totals-row">
-            <td>Team Total</td>
-            <td class="owned-cell">
-              <div class="owned-total">Total = ${fmtInt(aggOwned)}</div>
-              ${renderBreakdown(aggBreak)}
-            </td>
-            <td class="num">${fmtInt(aggActs)}</td>
-            <td class="num">${fmtInt(aggZero)}</td>
-            <td class="num" title="${aggCallsMtd} total / ${bizDays} business days">${aggCallsAvg}</td>
-            <td class="num" title="${aggEmailsMtd} total / ${bizDays} business days">${aggEmailsAvg}</td>
-            <td class="num">${fmtInt(aggBooked)}</td>
-            <td class="num">${fmtInt(aggWon)}</td>
-            <td class="num">${fmtInt(aggLost)}</td>
-          </tr>
-        </tbody>
-      </table>
-    </div>
-  `;
-}
-
 function renderScrapers(data) {
   const scrapers = data.scrapers || [];
   if (!scrapers.length) {
@@ -1287,13 +1193,13 @@ function renderSetters(data) {
       </tr>
       <tr class="rev-detail-row" id="rev-detail-setter-in-${safeUid}" hidden>
         <td colspan="7">
-          <div class="rev-detail-header">Inbound closed-won leads — William hosted a Vendingpreneurs Quick Discovery</div>
+          <div class="rev-detail-header">Inbound closed-won leads — ${s.name} hosted a discovery call</div>
           ${renderLeadList(s.inbound_leads, 'No inbound closed-won leads in this period.')}
         </td>
       </tr>
       <tr class="rev-detail-row" id="rev-detail-setter-out-${safeUid}" hidden>
         <td colspan="7">
-          <div class="rev-detail-header">Outbound closed-won leads — William booked directly (no VQD)</div>
+          <div class="rev-detail-header">Outbound closed-won leads — ${s.name} booked directly (no discovery call)</div>
           ${renderLeadList(s.outbound_leads, 'No outbound closed-won leads in this period.')}
         </td>
       </tr>
@@ -1340,23 +1246,14 @@ function render(rawData) {
   const data = adaptView(rawData, CURRENT_PERIOD);
   DATA = data;
 
-  const view = CURRENT_VIEW;            // 'reps' or 'scrapers'
+  const view = CURRENT_VIEW;            // 'scrapers' or 'setters'
   const weekMode = isWeekView(data);
   const periodNoun = weekMode ? 'WTD' : 'MTD';
 
   // KPIs depend on view + period
   let kpi1, kpi2, kpi3, kpi4;
   const periodLabel = data.month || data.month_label || '';
-  if (view === 'reps') {
-    const totalCalendar = Object.values(data.calendar || {}).reduce((s, n) => s + (n || 0), 0);
-    const totalOwned = (data.reps || []).reduce((s, r) => s + (r.owned_leads || 0), 0);
-    const totalZero = (data.reps || []).reduce((s, r) => s + (r.leads_zero_comms || 0), 0);
-    const totalBooked = (data.reps || []).reduce((s, r) => s + (r.calls_booked_mtd || 0), 0);
-    kpi1 = { label: `Assignments ${periodNoun}`, value: totalCalendar };
-    kpi2 = { label: 'Owned Leads (Now)',         value: totalOwned    };
-    kpi3 = { label: 'Leads w/ 0 Comms',          value: totalZero     };
-    kpi4 = { label: `Calls Booked ${periodNoun}`, value: totalBooked  };
-  } else if (view === 'scrapers') {
+  if (view === 'scrapers') {
     const totalBooked = (data.scrapers || []).reduce((s, r) => s + (r.meetings_booked_mtd || 0), 0);
     const totalShown  = (data.scrapers || []).reduce((s, r) => s + (r.meetings_shown_mtd  || 0), 0);
     const totalClosed = (data.scrapers || []).reduce((s, r) => s + (r.meetings_closed_ever || 0), 0);
@@ -1377,27 +1274,19 @@ function render(rawData) {
     kpi4 = { label: `Discovery Set ${periodNoun}`,   value: totalSet };
   }
 
-  const calendarHeading = view === 'reps'
-    ? `Lead assignments — ${periodLabel}`
-    : (view === 'scrapers'
-        ? `Meetings booked — ${periodLabel}`
-        : `Meetings booked by setters — ${periodLabel}`);
-  const calendarHelper = view === 'reps'
-    ? 'Click any day for a per-rep breakdown. Hover for handraiser mix.'
-    : (view === 'scrapers'
-        ? 'Click any day for a per-scraper breakdown. Hover for the scraper split.'
-        : 'Calendar shows meetings booked (same as Scraper view).');
-  const detailsHelper = view === 'reps'
+  const calendarHeading = view === 'scrapers'
+    ? `Meetings booked — ${periodLabel}`
+    : `Meetings booked by setters — ${periodLabel}`;
+  const calendarHelper = view === 'scrapers'
+    ? 'Click any day for a per-scraper breakdown. Hover for the scraper split.'
+    : 'Calendar shows meetings booked (same as Scraper view).';
+  const detailsHelper = view === 'scrapers'
     ? (weekMode
-        ? `Owned leads / handraisers / 0-comms = snapshot now · Activity & deal metrics = WTD (Mon–Fri)`
-        : `Owned leads = snapshot now · Activity/deal metrics = MTD · 0-comms = ever`)
-    : (view === 'scrapers'
-        ? (weekMode
-            ? `Activities = outbound only, WTD · Meetings Booked = Next Steps meetings scheduled in WTD · Closed &amp; Revenue = won in WTD (by close date)`
-            : `Activities = outbound only, MTD · Meetings Booked = Next Steps meetings scheduled in MTD · Closed &amp; Revenue = won in MTD (by close date)`)
-        : (weekMode
-            ? `Held = "Vendingpreneurs Quick Discovery" meetings hosted in WTD · Shown = held minus cancellations &amp; declines · Set = setter's Meetings Booked (same as scraper view)`
-            : `Held = "Vendingpreneurs Quick Discovery" meetings hosted in MTD · Shown = held minus cancellations &amp; declines · Set = setter's Meetings Booked (same as scraper view)`));
+        ? `Activities = outbound only, WTD · Meetings Booked = Next Steps meetings scheduled in WTD · Shown = meeting outcome "Completed" · Closed &amp; Revenue = won in WTD (by close date)`
+        : `Activities = outbound only, MTD · Meetings Booked = Next Steps meetings scheduled in MTD · Shown = meeting outcome "Completed" · Closed &amp; Revenue = won in MTD (by close date)`)
+    : (weekMode
+        ? `Held = "Vendingpreneurs Quick Discovery" meetings hosted in WTD · Shown = meeting outcome "Completed" · Set = setter's own bookings (William's Vending Consult Call &amp; scraper Next Steps)`
+        : `Held = "Vendingpreneurs Quick Discovery" meetings hosted in MTD · Shown = meeting outcome "Completed" · Set = setter's own bookings (William's Vending Consult Call &amp; scraper Next Steps)`);
 
   // Build the picker options for the current period
   const periodPickerOptions = (() => {
@@ -1476,22 +1365,21 @@ function render(rawData) {
         <h2>${calendarHeading}</h2>
         <span class="helper">${calendarHelper}</span>
       </div>
-      ${renderCalendar(data, view === 'setters' ? 'scrapers' : view)}
+      ${renderCalendar(data, 'scrapers')}
     </section>
 
     <section class="section">
       <div class="section-head">
         <div class="section-head-left">
-          <h2 style="margin:0">${view === 'reps' ? 'Rep details' : (view === 'scrapers' ? 'Scraper details' : 'Setter details')}</h2>
-          <div class="view-toggle" role="tablist" aria-label="Switch between rep, scraper, and setter views">
-            <button onclick="switchView('reps')"     class="${view === 'reps'     ? 'active' : ''}" role="tab" aria-selected="${view === 'reps'}">Rep details</button>
+          <h2 style="margin:0">${view === 'scrapers' ? 'Scraper details' : 'Setter details'}</h2>
+          <div class="view-toggle" role="tablist" aria-label="Switch between scraper and setter views">
             <button onclick="switchView('scrapers')" class="${view === 'scrapers' ? 'active' : ''}" role="tab" aria-selected="${view === 'scrapers'}">Scraper details</button>
             <button onclick="switchView('setters')"  class="${view === 'setters'  ? 'active' : ''}" role="tab" aria-selected="${view === 'setters'}">Setter details</button>
           </div>
         </div>
         <span class="helper">${detailsHelper}</span>
       </div>
-      ${view === 'reps' ? renderReps(data) : (view === 'scrapers' ? renderScrapers(data) : renderSetters(data))}
+      ${view === 'scrapers' ? renderScrapers(data) : renderSetters(data)}
     </section>
 
     <footer>
