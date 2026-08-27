@@ -414,6 +414,20 @@ def format_week_label(week_start, week_end_inclusive):
 # SCRAPERS
 # ============================================================================
 
+def _sum_in_range(day_dict, start_date, end_exclusive_date):
+    """Sum values from a {YYYY-MM-DD: number} dict for keys in [start, end_exclusive).
+    Returns 0 if the dict is empty/None. Silently skips malformed date keys."""
+    total = 0
+    for k, v in (day_dict or {}).items():
+        try:
+            d = datetime.strptime(k, "%Y-%m-%d").date()
+        except (TypeError, ValueError):
+            continue
+        if start_date <= d < end_exclusive_date:
+            total += v or 0
+    return total
+
+
 def fetch_all_scrapers_activities_per_day(scrapers, fetch_start):
     """Outbound activities per day per scraper — via one org-wide query per
     activity type, filtered by scraper user_ids client-side.
