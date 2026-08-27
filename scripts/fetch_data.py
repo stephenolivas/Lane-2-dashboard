@@ -618,7 +618,13 @@ def fetch_closes_per_day(scrapers, setters, fetch_start, fetch_end_exclusive):
             prefix     = setter["discovery_title_prefix"]
             scraper_handle = setter.get("scraper_setter_field_value")
 
-            has_vqd = _lead_has_vqd_by(lead_id, setter_uid, prefix)
+            # A setter with no discovery_title_prefix (e.g. Spencer, Pearl) can
+            # never have Inbound revenue — Inbound requires them to have hosted
+            # a discovery call. Skip the (expensive) meeting lookup for them.
+            if prefix:
+                has_vqd = _lead_has_vqd_by(lead_id, setter_uid, prefix)
+            else:
+                has_vqd = False
             if has_vqd:
                 vqd_hits_by_uid[setter_uid] += 1
             else:
