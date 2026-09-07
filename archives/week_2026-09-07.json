@@ -1,6 +1,6 @@
 {
   "kind": "week",
-  "generated_at": "2026-09-07T16:00:18.073688-07:00",
+  "generated_at": "2026-09-07T16:37:35.644059-07:00",
   "week_start": "2026-09-07",
   "week_end": "2026-09-11",
   "week_label": "Sep 7 \u2013 11, 2026",
@@ -42,6 +42,28 @@
     }
   },
   "scraper_daily_breakdowns": {
+    "2026-09-09": {
+      "user_yZWJTiMjUBfJt8pUPQG6hS7QfKUxwt322aYEABSUrQb": {
+        "name": "Charlie Ingram",
+        "meetings_set": 0,
+        "meetings_booked": 3,
+        "meetings_shown": 0,
+        "meetings_closed": 0,
+        "outbound_calls": 0,
+        "outbound_emails": 0,
+        "outbound_sms": 0
+      },
+      "user_wH5PGq1Wm84UW6KrKCt6YCioWocmlffYkbadH6rN43H": {
+        "name": "August Young",
+        "meetings_set": 0,
+        "meetings_booked": 1,
+        "meetings_shown": 0,
+        "meetings_closed": 0,
+        "outbound_calls": 0,
+        "outbound_emails": 0,
+        "outbound_sms": 0
+      }
+    },
     "2026-09-08": {
       "user_yZWJTiMjUBfJt8pUPQG6hS7QfKUxwt322aYEABSUrQb": {
         "name": "Charlie Ingram",
@@ -93,7 +115,7 @@
         "meetings_closed": 0,
         "outbound_calls": 41,
         "outbound_emails": 54,
-        "outbound_sms": 301
+        "outbound_sms": 302
       },
       "user_dQi0iL0igjCKtEXPSsv8ALDZMAz9orJxL60O7Q921jy": {
         "name": "Vince Bartolini",
@@ -102,8 +124,8 @@
         "meetings_shown": 0,
         "meetings_closed": 0,
         "outbound_calls": 0,
-        "outbound_emails": 539,
-        "outbound_sms": 8078
+        "outbound_emails": 550,
+        "outbound_sms": 8195
       },
       "user_0SuNg0OWd2reYMeyuDVqiVvjiGcRiFheKKOXXZpyaPZ": {
         "name": "Pearl Sathekge",
@@ -163,7 +185,7 @@
         "meetings_closed": 0,
         "outbound_calls": 0,
         "outbound_emails": 0,
-        "outbound_sms": 441
+        "outbound_sms": 442
       },
       "user_YlAbrpKa9iKWFt351Dk1BC4Cmr4SXHKDsSDMG4hnVHi": {
         "name": "Connor George",
@@ -191,9 +213,9 @@
         "meetings_booked": 0,
         "meetings_shown": 0,
         "meetings_closed": 0,
-        "outbound_calls": 48,
-        "outbound_emails": 4,
-        "outbound_sms": 27
+        "outbound_calls": 63,
+        "outbound_emails": 6,
+        "outbound_sms": 29
       },
       "user_32021LR58tWOSl2MX2nFVMSP8PoaGV1DjZEF0v0yGXs": {
         "name": "Melia King",
@@ -204,28 +226,6 @@
         "outbound_calls": 5,
         "outbound_emails": 1,
         "outbound_sms": 1
-      }
-    },
-    "2026-09-09": {
-      "user_yZWJTiMjUBfJt8pUPQG6hS7QfKUxwt322aYEABSUrQb": {
-        "name": "Charlie Ingram",
-        "meetings_set": 0,
-        "meetings_booked": 3,
-        "meetings_shown": 0,
-        "meetings_closed": 0,
-        "outbound_calls": 0,
-        "outbound_emails": 0,
-        "outbound_sms": 0
-      },
-      "user_wH5PGq1Wm84UW6KrKCt6YCioWocmlffYkbadH6rN43H": {
-        "name": "August Young",
-        "meetings_set": 0,
-        "meetings_booked": 1,
-        "meetings_shown": 0,
-        "meetings_closed": 0,
-        "outbound_calls": 0,
-        "outbound_emails": 0,
-        "outbound_sms": 0
       }
     },
     "2026-09-10": {
@@ -264,11 +264,11 @@
     {
       "user_id": "user_yZWJTiMjUBfJt8pUPQG6hS7QfKUxwt322aYEABSUrQb",
       "name": "Charlie Ingram",
-      "activities_mtd_total": 396,
+      "activities_mtd_total": 397,
       "activities_breakdown": {
         "outbound_calls": 41,
         "outbound_emails": 54,
-        "outbound_sms": 301
+        "outbound_sms": 302
       },
       "meetings_booked_mtd": 6,
       "meetings_shown_mtd": 1,
@@ -309,11 +309,11 @@
     {
       "user_id": "user_WmBJj4uIsE9WRLKMn5Y1i8MinIDJG5GjOHPeX2sUJCp",
       "name": "Jessica Zatkin",
-      "activities_mtd_total": 441,
+      "activities_mtd_total": 442,
       "activities_breakdown": {
         "outbound_calls": 0,
         "outbound_emails": 0,
-        "outbound_sms": 441
+        "outbound_sms": 442
       },
       "meetings_booked_mtd": 2,
       "meetings_shown_mtd": 0,
@@ -324,11 +324,11 @@
     {
       "user_id": "user_dQi0iL0igjCKtEXPSsv8ALDZMAz9orJxL60O7Q921jy",
       "name": "Vince Bartolini",
-      "activities_mtd_total": 8617,
+      "activities_mtd_total": 8745,
       "activities_breakdown": {
         "outbound_calls": 0,
-        "outbound_emails": 539,
-        "outbound_sms": 8078
+        "outbound_emails": 550,
+        "outbound_sms": 8195
       },
       "meetings_booked_mtd": 1,
       "meetings_shown_mtd": 0,
@@ -459,11 +459,11 @@
     {
       "user_id": "user_PBMfAYkPSkMaYK58gXuG70Vu1SLd2bsG3Mvys6RZNgY",
       "name": "Naria Torres",
-      "activities_mtd_total": 79,
+      "activities_mtd_total": 98,
       "activities_breakdown": {
-        "outbound_calls": 48,
-        "outbound_emails": 4,
-        "outbound_sms": 27
+        "outbound_calls": 63,
+        "outbound_emails": 6,
+        "outbound_sms": 29
       },
       "meetings_booked_mtd": 0,
       "meetings_shown_mtd": 0,
